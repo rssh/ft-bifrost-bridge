@@ -3619,6 +3619,36 @@ depended on an off-chain quantity (`signing_complete_slot`) no Cardano validator
 
 **Leader reward (mints only).** When a depositor mints fBTC (spending a PegInRequest UTxO and referencing the Confirmed TM record), `bridged_asset.ak` enforces one output paying the record's pinned `leader_reward` to its `poster` identity — distributing the posting cost across the mints that benefit from the TM and incentivizing timely submission. **Burns pay nothing**: the peg-out side already contributes through the datum-pinned `per_pegout_fee` (deducted from the BTC payout), so a burn-side reward would double-charge withdrawers — the model is *each side pays exactly once, through the channel where it receives value* — and taxing completion (a cleanup we want to happen) would discourage it. The Update-Y submitter is likewise uncompensated: one transaction per epoch, in the roster's own interest, permissionless.
 
+> **Open question — reward attribution (the leader free-ride).** `poster` is chosen by whoever
+> posts and is never validated, so the reward pays *the first poster, not necessarily the SPO(s)
+> who signed*. Because the fully-signed TM must be distributed to be relayed to Bitcoin, its bytes
+> are public: a free-rider who did no signing work can post first with their own identity and
+> capture `leader_reward`. **Safety is unaffected** — `swept`, `fulfilled` and `btc_txid` are
+> byte-derived from the TM and identical regardless of poster — this is purely *who gets paid*.
+> A consequence for §Confirm: two `Confirmed` records for one `btc_txid` may differ in
+> `poster`/`epoch`, so "duplicate records carry identical content" must be read as identical
+> *`swept`/`fulfilled`/`btc_txid`*.
+>
+> **Current decision: keep reward-to-first-poster** (the design specified above). Posting is
+> itself the paid liveness service, so paying whoever performs it is defensible, and it costs no
+> new machinery.
+>
+> **Known upgrade path, adopt only by agreement of all parties: a signature-bound leader
+> credential.** The elected leader's Cardano reward credential (28 bytes) is carried in an
+> `OP_RETURN` output of the TM's Bitcoin transaction, hence **covered by the FROST signature**;
+> Confirm — which already parses that transaction for `swept`/`fulfilled` — reads it and requires
+> `leader_reward` to pay there. A free-rider who posts cannot redirect it: altering the
+> `OP_RETURN` invalidates the signature, so the transaction never confirms. This decouples
+> who-posts from who-gets-paid while keeping posting permissionless and `tm_sequence` off-chain.
+>
+> **Why the reward is not simply verified on-chain.** `leader_index = hash("bifrost-leader" ‖
+> prev_tm_txid ‖ tm_sequence) mod roster_size` is not reproducible by a validator: `tm_sequence`
+> is an off-chain counter by design (the TM datum carries no sequence field), and mapping an index
+> to a reward address would need a dense, address-carrying roster, whereas the registration list is
+> a `pool_id`-sorted linked list with neither. Enforcing a signature-bound *result* avoids both
+> gaps; computing the leader on-chain would require reseeding the formula and committing an indexed
+> roster per epoch.
+
 **Example.** A roster of 5 SPOs (sorted by pool_id: $A, B, C, D, E$). The previous TM's Bitcoin txid hashes to leader index 3, so $D$ is the primary submitter. With $T = 60$ slots and signing completing at slot 1000:
 
 - Slot 1000: $D$ submits, posts TM to `TreasuryMovementValidator` with `leader = D`.

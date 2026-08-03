@@ -914,7 +914,7 @@ carrying the NFT forward.
 | 0 | `bifrost_identity_root` | ByteArray (32 B MPF root) | active `bifrost_id_pk → pool_id` bindings — global uniqueness of Bifrost identities (see §SPO Registration 3.3) |
 | 1 | `current_spos_frost_key` | ByteArray (32 B x-only) | the current treasury group key: $Y_{51}$ after the first successful DKG; **$Y_{federation}$ from K1 until then** — which is what makes Phase 1 operation and the governance continuum (Config updates, Update-Y) work unchanged |
 | 2 | `y_federation` | ByteArray (32 B x-only) | the federation fallback key — the script-leaf key of both Taproot trees |
-| 3 | `federation_csv_blocks` | Int | the `timeout_federation` CSV value baked into the federation leaves |
+| 3 | `federation_csv_blocks` | Int | the CSV timeout value baked into the federation leaves |
 
 Fields 2–3 complete address derivation: a depositor (or SPO) reads this **one** UTxO and derives
 both the Treasury and peg-in Taproot addresses (see *Taproot address construction*).
@@ -1043,7 +1043,7 @@ sequenceDiagram
     Note over Dep,TRE: Phase 1 — Bitcoin deposit
     Dep->>TRE: Read current Y₅₁ and Y_federation from treasury.ak
     Dep->>Dep: Derive peg-in Taproot address Q<br/>(Y₅₁ key path · Y_fed+CSV leaf · depositor refund leaf)
-    Dep->>BTC: Send BTC to Q with OP_RETURN "BFR" ‖ depositor_pubkey_hash
+    Dep->>BTC: Send BTC to Q with OP_RETURN beacon<br/>"BFR" ‖ D (refund key) ‖ Q_auth (67 B)
 
     Note over BTC,Bin: Phase 2 — Bitcoin state relayed to Cardano
     loop Continuous, competitive block relay
@@ -1105,7 +1105,7 @@ The Treasury address (holding consolidated funds) uses $Y_{51}$ as the key-path 
 
 Script leaf (federation rescue):
 ```
-<timeout_federation> OP_CHECKSEQUENCEVERIFY OP_DROP <Y_federation> OP_CHECKSIG
+<federation_csv_blocks> OP_CHECKSEQUENCEVERIFY OP_DROP <Y_federation> OP_CHECKSIG
 ```
 
 Merkle tree (single leaf):
@@ -1133,7 +1133,7 @@ The peg-in address uses $Y_{51}$ as the key-path internal key (for SPO sweep —
 
 Script leaf 1 (federation emergency sweep):
 ```
-<timeout_federation> OP_CHECKSEQUENCEVERIFY OP_DROP <Y_federation> OP_CHECKSIG
+<federation_csv_blocks> OP_CHECKSEQUENCEVERIFY OP_DROP <Y_federation> OP_CHECKSIG
 ```
 
 Script leaf 2 (depositor refund — same shape as the federation leaf):
@@ -1188,7 +1188,7 @@ Both quorum levels construct **full** Treasury Movement transactions (sweeping p
 
 **Key path on Treasury, key path on peg-in inputs (51% quorum — main line):**
 
-SPOs collect all confirmed PegInRequest and PegOut UTxOs from Cardano and construct a full Treasury Movement transaction. They spend both the treasury UTxO and the peg-in UTxOs via key path ($Y_{51}$) — a single 64-byte FROST Schnorr signature per input. To sign peg-in inputs, SPOs compute the tweaked private key: `d = y_51' + tagged_hash("TapTweak", Y_51 || merkle_root) (mod n)`, where $y_{51}$ is the FROST group private key (held as shares) and `y_51'` is $y_{51}$ **parity-normalized** — with `d` itself negated when the resulting output key has odd Y (see *Parity normalization* above; both rules are consensus-critical). Computing the merkle_root requires the depositor's pubkey hash (for the refund leaf) and $Y_{federation}$ (for the federation leaf) — both available from the PegInRequest datum and `treasury.ak`. This is the cheapest spending path.
+SPOs collect all confirmed PegInRequest and PegOut UTxOs from Cardano and construct a full Treasury Movement transaction. They spend both the treasury UTxO and the peg-in UTxOs via key path ($Y_{51}$) — a single 64-byte FROST Schnorr signature per input. To sign peg-in inputs, SPOs compute the tweaked private key: `d = y_51' + tagged_hash("TapTweak", Y_51 || merkle_root) (mod n)`, where $y_{51}$ is the FROST group private key (held as shares) and `y_51'` is $y_{51}$ **parity-normalized** — with `d` itself negated when the resulting output key has odd Y (see *Parity normalization* above; both rules are consensus-critical). Computing the merkle_root requires the depositor's x-only refund key `D` (for the refund leaf) and $Y_{federation}$ (for the federation leaf) — `D` comes from the beacon in the raw peg-in transaction held by the PegInRequest datum, $Y_{federation}$ from `treasury.ak`. This is the cheapest spending path.
 
 **Script path on Treasury, script path on peg-in inputs (federation — emergency):**
 
@@ -1202,7 +1202,7 @@ After ~30 days (4320 blocks), the depositor reveals the depositor refund script 
 
 Plutus V3 does not expose secp256k1 point arithmetic builtins (only `verifySchnorrSecp256k1Signature` and `verifyEcdsaSecp256k1Signature`), so `peg_in.ak` **cannot** reconstruct $Q$ from $Y_{51}$, $Y_{federation}$, and the depositor's script on-chain.
 
-Instead, Taproot address correctness is verified **off-chain by SPOs**: before including a peg-in in the Treasury Movement transaction, each SPO independently reconstructs the expected peg-in Taproot address from $Y_{51}$, $Y_{federation}$, and the depositor's pubkey hash (read from the PegInRequest datum), and verifies it matches the Bitcoin transaction output. SPOs will not sign a Treasury Movement transaction that spends UTxOs they cannot actually spend.
+Instead, Taproot address correctness is verified **off-chain by SPOs**: before including a peg-in in the Treasury Movement transaction, each SPO independently reconstructs the expected peg-in Taproot address from $Y_{51}$, $Y_{federation}$, and the depositor's refund key `D` (read from the beacon in the PegInRequest datum), and verifies it matches the Bitcoin transaction output. SPOs will not sign a Treasury Movement transaction that spends UTxOs they cannot actually spend.
 
 This design is safe because:
 
@@ -1238,7 +1238,7 @@ sequenceDiagram
     participant SPO as SPO program<br/>(current roster)
 
     Note over Wdr,POUT: Phase 1 — Lock fBTC on Cardano
-    Wdr->>POUT: Create PegOut UTxO — lock fBTC + MIN_ADA, mint PegOut NFT,<br/>datum = { btc_destination_scriptPubKey, owner_auth }
+    Wdr->>POUT: Create PegOut UTxO — lock fBTC + MIN_ADA (nothing minted),<br/>datum = { owner_auth, source_chain_destination_address,<br/>source_chain_treasury_utxo_id, per_pegout_fee }
 
     Note over POUT,SPO: Phase 2 — Treasury Movement build and signing (per TM batch)
     SPO->>POUT: Read pending PegOut UTxOs (pegs snapshot, FIFO,<br/>past the Cardano stability window)
@@ -1255,8 +1255,8 @@ sequenceDiagram
     end
     WT->>TMC: Confirm TM tx with a Binocular inclusion proof —<br/>datum becomes { btc_txid, epoch, swept_peg_in_utxo_ids, fulfilled_peg_outs }
 
-    Note over Wdr,TMC: Phase 4 — Completion on Cardano (fully permissionless)
-    WT->>POUT: Anyone spends the PegOut UTxO referencing the Confirmed TM tx —<br/>burns the locked fBTC and the PegOut NFT
+    Note over Wdr,TMC: Phase 4 — Completion on Cardano (withdrawer, per owner_auth)
+    Wdr->>POUT: Spend the PegOut UTxO — supply the raw TM,<br/>a Binocular inclusion proof, and a non-membership proof —<br/>burns the locked fBTC
     POUT-->>Wdr: MIN_ADA returned to the withdrawer
 
     alt TM did not include the peg-out payment
@@ -1381,7 +1381,7 @@ flowchart LR
 
 **Checks delegated to SPOs off-chain** (Plutus V3 cannot do secp256k1 point arithmetic, so these are verified before signing the TM)
 
-* The BTC output pays a valid Bifrost peg-in Taproot address (reconstructed from $Y_{51}$, $Y_{federation}$, and the depositor's pubkey hash).
+* The BTC output pays a valid Bifrost peg-in Taproot address (reconstructed from $Y_{51}$, $Y_{federation}$, and the depositor's refund key `D` from the beacon).
 * The OP_RETURN beacon equals `BFR ‖ D ‖ Q_auth`.
 * The claimed peg-in amount matches the BTC output amount.
 
@@ -3194,7 +3194,7 @@ All SPOs independently construct the same Treasury Movement (TM) transaction fro
 - Inputs 1..$k$: peg-in UTxOs, ordered lexicographically by (txid ‖ vout). Comparison is byte-by-byte, left-to-right; txid is 32 bytes, vout is encoded as 4 bytes little-endian.
 - Sequence numbers (per spending mode):
   - **51% mode**: `0xFFFFFFFD` for every input. Bit 31 is set, so BIP68 relative timelocks are disabled; the value is below `0xFFFFFFFE`, so RBF is signaled. No CSV is evaluated in this path.
-  - **Federation mode**: `timeout_federation` (the protocol parameter, encoded as a BIP68 block-based value with bit 31 clear) for every input. Bit 31 clear enables BIP68, satisfying `OP_CHECKSEQUENCEVERIFY <timeout_federation>` in the federation script leaves. Any value with bit 31 clear is automatically below `0xFFFFFFFE`, so RBF is also signaled.
+  - **Federation mode**: `federation_csv_blocks` (the protocol parameter, encoded as a BIP68 block-based value with bit 31 clear) for every input. Bit 31 clear enables BIP68, satisfying `OP_CHECKSEQUENCEVERIFY <federation_csv_blocks>` in the federation script leaves. Any value with bit 31 clear is automatically below `0xFFFFFFFE`, so RBF is also signaled.
 
 **Outputs (deterministic ordering).**
 
@@ -3213,7 +3213,8 @@ All SPOs independently construct the same Treasury Movement (TM) transaction fro
 A peg-out in the frozen batch is **skipped** — excluded from the outputs, never aborting the
 TM — iff any of the following holds: its datum does not decode as `PegOutDatum`; its
 `source_chain_treasury_utxo_id` differs from this TM's treasury input; its destination
-`scriptPubKey` is unparseable; its datum `per_pegout_fee` is **below the Operational-params
+`scriptPubKey` is unparseable; its locked fBTC amount is below `min_peg_out_fbtc` at the batch
+snapshot slot; its datum `per_pegout_fee` is **below the Operational-params
 floor** at the batch snapshot slot; or its net payout `amount − datum.per_pegout_fee` is below
 Bitcoin dust (330 sat). The floor and `min_peg_out_fbtc` come from the Operational parameters
 UTxO at the batch snapshot slot, so every SPO computes the identical skip set. Skipped peg-outs

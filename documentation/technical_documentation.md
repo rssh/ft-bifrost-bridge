@@ -3,11 +3,11 @@
 ## Architecture overview
 
 Bifrost is an optimistic bridge that leverages Cardano Stake Pools high decentralization level to secure the peg-ins and peg-outs from and to other UTxO blockchains like Bitcoin, Dogecoin and Litecoin.
-Because of the limited scripting capabilities of these blockchains, in recent years different bridging alternatives have been proposed. The current most known alternatives are FROST signatures of a small set of external nodes (Stacks), BitVM optimistic behaviour with 1-of-n honesty assumption with limited availability (Cardinal, Citrea) and Watchtower multisignature behaviour (Rosen Bridge).
+Because of the limited scripting capabilities of these blockchains, in recent years different bridging alternatives have been proposed. The current most known alternatives are FROST signatures of a small set of external nodes (Stacks), BitVM optimistic behaviour with 1-of-n honesty assumption with limited availability (Cardinal, Citrea) and watchtower multisignature behaviour (Rosen Bridge).
 
 Bifrost takes inspiration from all these solutions, but this time Cardano is used as a core component to guarantee the security and uncensorability of the user’s actions.
 
-It then becomes easier to connect Cardano, a UTXO blockchain with smart contracts, to other smart contract blockchains and Layer 2s, making Cardano the central component of a safe bridging process.
+It then becomes easier to connect Cardano, a UTxO blockchain with smart contracts, to other smart contract blockchains and Layer 2s, making Cardano the central component of a safe bridging process.
 
 ![General bridge design](./images/Bridging_Design.png)
 
@@ -75,7 +75,7 @@ This section collects the acronyms, protocol terms, on-chain validators, mathema
 * **Poseidon**: ZK-friendly algebraic hash, used for payload self-commitments and the Round-2 share KDF (cheap inside ZK circuits, never computed on-chain).
 * **L2**: Layer 2.
 * **MIN_ADA / min_utxo**: Minimum ADA required to keep a UTxO alive.
-* **MPT**: Merkle Patricia Trie.
+* **MPF**: Merkle Patricia Forestry — the on-chain trie structure (library: `aiken-lang/merkle-patricia-forestry`).
 * **NFT**: Non-Fungible Token.
 * **P2PKH**: Pay-to-Public-Key-Hash.
 * **PoK**: Proof of Knowledge.
@@ -93,14 +93,14 @@ This section collects the acronyms, protocol terms, on-chain validators, mathema
 * **AuthorizationMethod (`owner_auth`)**: the on-chain authority type used by PegInDatum/PegOutDatum. Variants (implemented `bifrost/types/general.ak`): `CardanoSignature{hash}` — the tx must be signed by that payment key; `CardanoSpendScript{hash}` / `CardanoWithdrawScript{hash}` / `CardanoMintScript{hash}` — the tx must execute that script for the matching purpose; `CardanoTokenOwnership{policy_id, asset_name}` — an input must hold that token. Satisfying `owner_auth` means meeting the variant's condition in the authorizing transaction.
 * **Banning (exponential timeout)**: temporary exclusion of an SPO from the active roster, with each successive ban doubling the exclusion duration (see §SPO Registration).
 * **Bifrost identity key (`bifrost_id_pk` / `bifrost_id_sk`)**: long-term Secp256k1 keypair used for all Bifrost protocol operations after registration.
-* **Bifrost identity root (`bifrost_identity_root`)**: MPT root in `treasury.ak` over active `bifrost_id_pk -> pool_id` bindings.
-* **Bifrost Membership Token**: singleton NFT minted per `pool_id` under `spos_registry.ak` as the on-chain badge of Bifrost participation.
+* **Bifrost identity root (`bifrost_identity_root`)**: MPF root in `treasury.ak` over active `bifrost_id_pk -> pool_id` bindings.
+* **Bifrost Membership Token**: singleton NFT minted per `pool_id` under `spos-registry.ak` as the on-chain badge of Bifrost participation.
 * **Bifrost URL (`bifrost_url`)**: HTTP endpoint where an SPO publishes DKG and signing payloads.
 * **Binocular Oracle**: on-chain Cardano contract that stores validated Bitcoin block headers and serves inclusion proofs (see [1]). Implemented as a Scalus contract in the binocular sub-project (`BitcoinValidator.scala`).
 * **Canonical byte layout**: deterministic serialization of a payload's fields used as the message under signature for the `sign-the-hash` scheme.
 * **Cold key (`cold_vkey` / `cold_skey`)**: a pool's long-term Ed25519 keypair, used only for registration and revocation.
 * **Completed peg-ins trie**: NFT-authenticated singleton UTxO holding an MPF root recording every minted peg-in to prevent double minting (kept outside `treasury.ak` for contention isolation — permissionless mints must not serialize against SPO state updates).
-* **Completed peg-outs tree**: NFT-authenticated singleton UTxO holding a Merkle Patricia Forestry root recording every completed peg-out (keyed by the PegOut UTxO's Cardano outpoint), making completions once-only.
+* **Completed peg-outs trie**: NFT-authenticated singleton UTxO holding a Merkle Patricia Forestry root recording every completed peg-out (keyed by the PegOut UTxO's Cardano outpoint), making completions once-only.
 * **Config UTxO**: NFT-authenticated, **immutable and never-spent** UTxO at `config.ak` holding the instance's wiring (cross-referenced script hashes, token identities, the genesis treasury outpoint); read as a reference input by the other validators (see §Config UTxO).
 * **Operational parameters UTxO**: NFT-authenticated singleton holding the tunable protocol values (fee rate, per-peg-out fee floor, minimums), updated by group-signed roster transactions; read by **no on-chain validator**, so updates invalidate no in-flight transactions (see §Operational parameters UTxO).
 * **Confirmed (Binocular)**: a Bitcoin block that has 100+ confirmations and has cleared the 200-minute challenge window (see [1]).
@@ -109,10 +109,11 @@ This section collects the acronyms, protocol terms, on-chain validators, mathema
 * **Eligible roster**: `registration_list \ active_ban_list` for the relevant protocol time.
 * **Epoch boundary**: Cardano epoch transition; the moment registration snapshots, stake distribution snapshots, and roster handoffs occur.
 * **Equivocation**: two distinct signed payloads from the same SPO under the same `namespace_hash`.
-* **FaultProof token**: singleton NFT minted by an authorized fault verifier policy after a direct fault is established. Its token name is `blake2b_256(pool_id || evidence_hash)`, and `spo_bans.ak` consumes it to apply a ban.
+* **FaultProof token**: singleton NFT minted by an authorized fault verifier policy after a direct fault is established. Its token name is `blake2b_256(pool_id || evidence_hash)`, and `spo-bans.ak` consumes it to apply a ban.
 * **Federation / $Y_{federation}$**: pre-defined fallback signing entity used for emergency Treasury Movement signing.
 * **Group public key ($Y$, $Y_{51}$)**: FROST aggregate public key produced by the DKG.
-* **Inclusion / Non-inclusion proof**: cryptographic proof that an item is (or is not) in a Merkle/MPT structure.
+* **Inclusion proof**: cryptographic proof that an item is in a Merkle structure (e.g. a tx in a block, a block in the confirmed chain).
+* **Membership / Non-membership proof**: cryptographic proof that a key is present (or absent) in an MPF trie (completed-peg-ins trie, completed-peg-outs trie, identity map).
 * **Internal key (Taproot)**: key used as the BIP341 [4] Taproot internal key ($Y_{51}$ for both Treasury and peg-in trees in Bifrost).
 * **Invalid payload (fault)**: payload whose contents fail cryptographic verification; provable on-chain via Halo2 ZK.
 * **Key path / Script path**: the two BIP341 [4] Taproot spending paths.
@@ -121,8 +122,8 @@ This section collects the acronyms, protocol terms, on-chain validators, mathema
 * **Mode (`51` / federation)**: active threshold path used for the current TM signing attempt.
 * **`namespace_hash`**: `blake2b_256(phase ‖ epoch ‖ threshold_or_mode ‖ attempt ‖ txid?)`, scoping a fault to a single protocol round.
 * **New roster**: roster derived from registrations at the upcoming epoch boundary; takes control after treasury handoff.
-* **PegInRequest**: UTxO at `peg_in.ak` carrying the raw Bitcoin peg-in transaction and an NFT, marking a confirmed deposit available for SPOs to sweep.
-* **PegOut request**: UTxO at `peg_out.ak` locking fBTC plus MIN_ADA with a Bitcoin destination address in the datum.
+* **PegInRequest**: UTxO at `peg-in.ak` carrying the raw Bitcoin peg-in transaction and an NFT, marking a confirmed deposit available for SPOs to sweep.
+* **PegOut request**: UTxO at `peg-out.ak` locking fBTC plus MIN_ADA with a Bitcoin destination address in the datum.
 * **`pool_id`**: `blake2b_224(cold_vkey)`; the canonical Cardano stake pool identifier.
 * **Pull model**: communication model where SPOs poll each other's `bifrost_url` endpoints rather than push.
 * **Registration linked-list**: on-chain ordered list keyed by `pool_id` of all currently registered Bifrost SPOs.
@@ -131,16 +132,16 @@ This section collects the acronyms, protocol terms, on-chain validators, mathema
 * **Schnorr signature (BIP340 [3])**: 64-byte secp256k1 Schnorr signature scheme used throughout the protocol.
 * **Sighash (BIP341 [4])**: per-input message digest signed under SIGHASH_ALL Taproot rules.
 * **Sign-the-hash**: authentication scheme where the SPO signs `SHA256(canonical_bytes)`, enabling both off-chain and on-chain signature verification.
-* **Signing cascade / Threshold failover**: sequential attempt order: 51% → federation.
+* **Signing cascade**: sequential signing attempt order: 51% → federation.
 * **Signing share ($s_i$)**: SPO's long-lived FROST private share.
-* **Stability window**: Cardano `3k/f` window after which the pegs snapshot is taken for the current epoch's TM.
+* **Stability window**: Cardano `3k/f` window; a peg enters a batch snapshot only after it is past this window.
 * **Tagged hash**: `SHA256(SHA256(tag) ‖ SHA256(tag) ‖ msg)`, per BIP340 [3] / BIP341 [4].
 * **Taproot tree / Merkle root**: script tree structure committing alternative spending paths for a Taproot output.
 * **Timeout cascade (leader)**: slot-indexed schedule under which subsequent SPOs become eligible to submit a TM.
 * **Treasury**: Bitcoin Taproot UTxO holding all consolidated bridged BTC.
 * **TM chain**: the sequence of Confirmed TM records, each proving its treasury input is either the initial treasury outpoint (Config's `initial_btc_treasury_utxo`; implemented field #11) or output 0 of the previous Confirmed record. The current treasury outpoint is the chain's tip, derived off-chain — there is no mutable on-chain pointer register (see *Post signed TM*).
 * **Treasury Movement (TM) Transaction**: Bitcoin transaction sweeping confirmed PegInRequests, fulfilling PegOuts, and moving the treasury to the next-epoch Treasury address.
-* **Treasury state UTxO**: the NFT-authenticated reference UTxO at `treasury.ak` storing the current treasury group keys and the Bifrost identity root (the completed peg-ins/outs trees live in their own singletons — see *Completed peg-ins trie* / *Completed peg-outs tree*).
+* **Treasury state UTxO**: the NFT-authenticated reference UTxO at `treasury.ak` storing the current treasury group keys and the Bifrost identity root (the completed-peg-ins and completed-peg-outs tries live in their own singletons — see *Completed peg-ins trie* / *Completed peg-outs trie*).
 * **Tweak / Tweaked key**: `Y + tagged_hash("TapTweak", Y ‖ merkle_root) · G`, per BIP341 [4].
 * **Verification share ($Y_i = s_i · G$)**: public counterpart of an SPO's FROST signing share.
 * **Watchtower**: permissionless actor that relays Bitcoin headers to Binocular, posts PegInRequests, and broadcasts signed TMs to Bitcoin.
@@ -152,16 +153,16 @@ Source code for the Aiken validators listed here is published in the Bifrost on-
 
 | Validator              | Role                                                                                                                                              |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `spos_registry.ak`     | Pool-scoped registration linked-list.                                                                                                             |
-| `spo_bans.ak`          | Pool-scoped temporary and permanent ban linked-list; consumes authorized `FaultProof` tokens to apply bans.                                       |
+| `spos-registry.ak`     | Pool-scoped registration linked-list.                                                                                                             |
+| `spo-bans.ak`          | Pool-scoped temporary and permanent ban linked-list; consumes authorized `FaultProof` tokens to apply bans.                                       |
 | `fault_verifier.ak`    | Mock verifier policy for direct-fault records. Production uses separate authorized policies for Round 1, Round 2, and equivocation faults.          |
-| `peg_in.ak`            | Holds PegInRequest UTxOs created from confirmed Bitcoin deposits.                                                                                 |
-| `peg_out.ak`           | Holds PegOut UTxOs from withdrawers; consumed once the TM is confirmed on Bitcoin.                                                                |
+| `peg-in.ak`            | Holds PegInRequest UTxOs created from confirmed Bitcoin deposits.                                                                                 |
+| `peg-out.ak`           | Holds PegOut UTxOs from withdrawers; consumed once the TM is confirmed on Bitcoin.                                                                |
 | `completed-peg-outs-merkle-tree.ak` | NFT-authenticated singleton holding the MPF root of completed peg-outs (keyed by PegOut UTxO outpoint); spent and recreated on every completion. |
 | `treasury.ak`          | Stores the Treasury state UTxO: the current treasury group keys ($Y_{51}$, $Y_{federation}$) and the Bifrost identity root.                       |
 | `completed-peg-ins-merkle-tree.ak` | NFT-authenticated singleton holding the MPF root of completed peg-ins (keyed by `peg_in_utxo_id`); spent and recreated on every fBTC mint. |
 | `TreasuryMovementValidator` | Stores SPO-signed Bitcoin TM transactions for watchtower relay; enforces leader-election rules. Scalus contract in binocular (`TreasuryMovementValidator.scala`), not in the Aiken tree. |
-| `bridged_asset.ak`     | fBTC mint/burn policy; verifies TM-confirmed peg-in sweeps and Schnorr-signed depositor claims.                                                   |
+| `bridged-token.ak`     | fBTC mint/burn policy; verifies TM-confirmed peg-in sweeps and Schnorr-signed depositor claims.                                                   |
 | `config.ak`            | Singleton Config NFT + Config UTxO: instance wiring (script hashes, token identities, genesis treasury outpoint), read by all other validators as a reference input; supports authorized Update and Retire (see *Config UTxO governance*). |
 | operational params validator | One-shot params NFT + Operational parameters UTxO: the tunable values (fee rate, fee floor, minimums); spend authorized by the treasury group key; read by no on-chain validator. |
 
@@ -173,23 +174,23 @@ Source code for the Aiken validators listed here is published in the Bifrost on-
 | Config NFT | `config.ak` (one-shot) | mint parameter (deployed: `BIFCFG`) | bootstrap / Retire | instance identity + wiring |
 | Operational params NFT | params validator (one-shot) | mint parameter | bootstrap / never | tunables singleton |
 | Treasury state NFT | treasury bootstrap policy (K1) | `sha256(serialiseData(consumed outpoint))` | K1 / never | SPO-state singleton |
-| Registration-list root | `spos_registry.ak` | `reg-root` | bootstrap / never | registration list anchor |
-| Bifrost Membership Token | `spos_registry.ak` | `pool_id` | register / deregister | one per registered pool |
-| Ban-list root | `spo_bans.ak` | `ban-root` | bootstrap / never | ban list anchor |
-| Ban node token | `spo_bans.ak` | `ban/ ‖ pool_id` | first ban / never | one per banned pool |
+| Registration-list root | `spos-registry.ak` | `reg-root` | bootstrap / never | registration list anchor |
+| Bifrost Membership Token | `spos-registry.ak` | `pool_id` | register / deregister | one per registered pool |
+| Ban-list root | `spo-bans.ak` | `ban-root` | bootstrap / never | ban list anchor |
+| Ban node token | `spo-bans.ak` | `ban/ ‖ pool_id` | first ban / never | one per banned pool |
 | `FaultProof` | authorized fault-verifier policies | `blake2b_256(pool_id ‖ evidence_hash)` | fault proof / ban application | evidence-bound fault record |
-| PegInRequest NFT | `peg_in.ak` | hash of the mint's consumed `input_ref` — unique per request | create / complete-or-close | request identity |
+| PegInRequest NFT | `peg-in.ak` | hash of the mint's consumed `input_ref` — unique per request | create / complete-or-close | request identity |
 | Completed-peg-ins NFT | cpi tree policy (one-shot) | mint parameter | bootstrap / never | cpi MPF root singleton |
 | Completed-peg-outs NFT | cpo tree policy (one-shot) | mint parameter | bootstrap / never | cpo MPF root singleton |
 | TM NFT | TM record policy | unique per record | post / burned by the creator's GC after the grace period (see *Confirm TM tx*) | Unconfirmed → Confirmed identity |
-| fBTC | `bridged_asset.ak` | `"fBTC"` | complete peg-in / complete peg-out | the bridged asset — 1 token = 1 satoshi |
+| fBTC | `bridged-token.ak` | `"fBTC"` | complete peg-in / complete peg-out | the bridged asset — 1 token = 1 satoshi |
 
 No peg-out token exists — creating a peg-out request mints nothing (see *Create PegOut request*).
 
 ### Config UTxO governance
 
 The Config UTxO is a singleton NFT at `config.ak` carrying the `ConfigDatum`
-that every other validator reads via a reference input. Because `bridged_asset.ak`
+that every other validator reads via a reference input. Because `bridged-token.ak`
 is parameterized only by the config NFT identity and reads the current
 protocol script hashes from the datum at run time, updating the `ConfigDatum`
 swaps out protocol validators while the fBTC policyId stays stable, so
@@ -295,8 +296,8 @@ rules, timelocks with peg-out exit windows) lives in the swappable
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
 | Registry Snapshot      | Epoch-boundary snapshot of the registration linked-list.                                                    |
 | Stake Distribution     | Epoch-boundary snapshot of delegated stake from the previous epoch.                                         |
-| Pegs Snapshot          | Freezing of pending PegInRequest and PegOut UTxOs at the Cardano stability window for inclusion in the TM. |
-| Update Y               | Publication of the new roster's $Y_{51}$ to `treasury.ak`.                                                  |
+| Batch snapshot         | Freezing of pending PegInRequest and PegOut UTxOs at the batch's stability cutoff for inclusion in the TM.  |
+| Update-Y               | Publication of the new roster's $Y_{51}$ to `treasury.ak`.                                                  |
 | Build TM               | Deterministic construction of the unsigned Treasury Movement transaction by all SPOs.                       |
 | Signing cascade        | Threshold-failover signing sequence (51% → federation).                                                     |
 | TM submission deadline | Latest slot at which the signed TM may be posted to `TreasuryMovementValidator`.                                 |
@@ -321,7 +322,7 @@ Bifrost setup is made by the following components:
 * **Withdrawers**: users that burn their bridged assets on Cardano to unlock them on the proper source blockchain.
 * **Cardano Stake Pool Operators (SPOs)**: Cardano nodes that have delegated stake by Cardano users and that participate in Cardano consensus, guaranteeing its security.
 * **Multisig treasury**: a script address on the source blockchain that holds all the bridged assets and it’s protected by a multisignature that only SPOs together can use. Each SPO has a weight equal to its delegation and a specific threshold of SPOs signature must be reached to spend/move the multisig treasury.
-* **Watchtowers**: an open and always dynamic set of actors who have visibility on both Cardano and the source blockchain. They compete to post the most truthful source blockchain chain of blocks to the Binocular Oracle on Cardano. They also detect peg-in transactions on the source blockchain and post them as PegInRequest UTxOs on Cardano, and they relay SPO-signed Treasury Movement transactions from Cardano to the source blockchain. Anyone can become a Watchtower at any moment.
+* **Watchtowers**: an open and always dynamic set of actors who have visibility on both Cardano and the source blockchain. They compete to post the most truthful source blockchain chain of blocks to the Binocular Oracle on Cardano. They also detect peg-in transactions on the source blockchain and post them as PegInRequest UTxOs on Cardano, and they relay SPO-signed Treasury Movement transactions from Cardano to the source blockchain. Anyone can become a watchtower at any moment.
 
 Bifrost logic is fully encapsulated in the following solutions:
 
@@ -329,15 +330,15 @@ Bifrost logic is fully encapsulated in the following solutions:
 * **Watchtower program**: watchtowers run this software on top of source blockchain and Cardano nodes. It posts source blockchain block headers to the Binocular Oracle, detects peg-in transactions and posts PegInRequest UTxOs on Cardano, and relays SPO-signed Treasury Movement transactions to the source blockchain.
 * Cardano smart contracts:
   * **config.ak**: mints the one-shot Config NFT and holds the Config UTxO — the immutable spine of the instance, recording every cross-referenced script hash, token identity, and the genesis treasury outpoint (see §Config UTxO). All other validators locate their peers by reading it as a reference input; it is never spent. The tunable values live in the separate **Operational parameters UTxO** (group-signed updates, read by no on-chain validator — see §Operational parameters UTxO).
-  * **spos_registry.ak**: SPOs that participate in Bifrost need to register here for the next upcoming epoch. The registry maintains the pool-scoped registration linked-list on-chain. Registration entries are keyed by `pool_id = blake2b_224(cold_vkey)` and store the authorized `bifrost_id_pk` and `bifrost_url` used by the off-chain SPO protocol.
-  * **spo_bans.ak**: maintains the pool-scoped ban linked-list on-chain. It consumes verified direct-fault tokens from an allow-list of fault verifier policies and applies time-based ban updates.
-  * **fault_verifier.ak**: mock verifier policy for direct SPO fault evidence. Production uses separate verifier policies for DKG Round 1 faults, DKG Round 2 faults, and equivocation faults. Other scripts, including `spo_bans.ak`, consume the resulting tokens instead of re-verifying the raw evidence.
+  * **spos-registry.ak**: SPOs that participate in Bifrost need to register here for the next upcoming epoch. The registry maintains the pool-scoped registration linked-list on-chain. Registration entries are keyed by `pool_id = blake2b_224(cold_vkey)` and store the authorized `bifrost_id_pk` and `bifrost_url` used by the off-chain SPO protocol.
+  * **spo-bans.ak**: maintains the pool-scoped ban linked-list on-chain. It consumes verified direct-fault tokens from an allow-list of fault verifier policies and applies time-based ban updates.
+  * **fault_verifier.ak**: mock verifier policy for direct SPO fault evidence. Production uses separate verifier policies for DKG Round 1 faults, DKG Round 2 faults, and equivocation faults. Other scripts, including `spo-bans.ak`, consume the resulting tokens instead of re-verifying the raw evidence.
   * **Binocular**: The watchtowers (anyone) post the best chain of blocks here, other watchtowers eventually challenge it by posting a better version and the winner gets rewarded by the end of the availability window.
-  * **peg_in.ak**: watchtowers (or anyone) create PegInRequest UTxOs here by minting a PegInRequest NFT and providing a Binocular inclusion proof of the Bitcoin deposit transaction. The datum contains the raw Bitcoin peg-in transaction bytes. SPOs do not have direct access to Bitcoin chain state, so PegInRequest UTxOs serve as their trusted source of Bitcoin deposit data for constructing Treasury Movement transactions.
-  * **peg_out.ak**: when a withdrawer wants to unlock the bridged assets on the proper source blockchain, he locks his bridged assets at this smart contract. The datum contains the source blockchain destination address where assets should be sent and the source-chain treasury outpoint the paying Treasury Movement must spend (pinning the peg-out to exactly one possible TM). SPOs read these UTxOs to include peg-out payments in the Treasury Movement transaction.
-  * **treasury.ak**: stores the Treasury state UTxO. It carries the currently available Treasury FROST group public keys (for the 51% mode after DKG completes), the federation fallback key $Y_{federation}$, and a Merkle Patricia Trie root for active Bifrost identity bindings `bifrost_id_pk -> pool_id`. Depositors and validators read the current Treasury keys to derive valid spend/mint paths; registration and revocation transactions update the Bifrost-identity trie root to preserve global uniqueness of active Bifrost keys. The completed peg-ins and completed peg-outs trees live in **separate** NFT-authenticated singletons (see below) — deliberately, for contention isolation: fBTC mints and peg-out completions are frequent and permissionless, and co-locating their tries with the SPO state would serialize every mint against registrations, key rotations, and TM confirmations. For the first epoch, the initial Treasury public keys and trie roots are set during protocol bootstrap.
+  * **peg-in.ak**: watchtowers (or anyone) create PegInRequest UTxOs here by minting a PegInRequest NFT and providing a Binocular inclusion proof of the Bitcoin deposit transaction. The datum contains the raw Bitcoin peg-in transaction bytes. SPOs do not have direct access to Bitcoin chain state, so PegInRequest UTxOs serve as their trusted source of Bitcoin deposit data for constructing Treasury Movement transactions.
+  * **peg-out.ak**: when a withdrawer wants to unlock the bridged assets on the proper source blockchain, he locks his bridged assets at this smart contract. The datum contains the source blockchain destination address where assets should be sent and the source-chain treasury outpoint the paying Treasury Movement must spend (pinning the peg-out to exactly one possible TM). SPOs read these UTxOs to include peg-out payments in the Treasury Movement transaction.
+  * **treasury.ak**: stores the Treasury state UTxO. It carries the currently available Treasury FROST group public keys (for the 51% mode after DKG completes), the federation fallback key $Y_{federation}$, and an MPF root for active Bifrost identity bindings `bifrost_id_pk -> pool_id`. Depositors and validators read the current Treasury keys to derive valid spend/mint paths; registration and revocation transactions update the Bifrost-identity trie root to preserve global uniqueness of active Bifrost keys. The completed-peg-ins and completed-peg-outs tries live in **separate** NFT-authenticated singletons (see below) — deliberately, for contention isolation: fBTC mints and peg-out completions are frequent and permissionless, and co-locating their tries with the SPO state would serialize every mint against registrations, key rotations, and TM confirmations. For the first epoch, the initial Treasury public keys and trie roots are set during protocol bootstrap.
   * **TreasuryMovementValidator**: signed source blockchain Treasury Movement transactions are posted here (permissionlessly — see *Post signed TM*). The `Unconfirmed` datum contains the serialized signed transaction; the swept peg-in and fulfilled peg-out sets are **implicit in the transaction bytes** and are parsed out at the Confirm step. Ordering comes from the TM chain itself (each record spends its predecessor's treasury output), so the datum carries no sequence fields. Watchtowers monitor this contract and relay the signed transactions to the source blockchain.
-  * **bridged_asset.ak**: minting and burning of bridged assets (e.g. fBTC). The depositor mints fBTC by spending the PegInRequest UTxO and providing: a Binocular inclusion proof of the confirmed Treasury Movement transaction, a reference to the corresponding `TreasuryMovementValidator` UTxO (to verify the confirmed transaction matches what SPOs signed and posted), a non-inclusion proof against the completed peg-ins Merkle Patricia Trie in `treasury.ak` (preventing double minting), and a **BIP-322** signature (from the Taproot address whose output key is the beacon's `Q_auth`) proving ownership. The validator verifies the Binocular-confirmed txid matches the `TreasuryMovementValidator` datum (proving the confirmed transaction matches what was posted by the protocol's signing cascade), parses the raw TM transaction to verify the depositor's peg-in txid+vout appears as an input (proving the Treasury Movement actually swept the deposit), verifies the depositor's BIP-322 signature against the `Q_auth` recorded in the PegInDatum (bound to the deposit's beacon at mint time), verifies the peg-in is not already in the completed trie, and mints the correct amount of fBTC to whatever Cardano address the depositor specifies in the transaction outputs. The minting transaction also inserts the peg-in into the completed-peg-ins tree. The withdrawer (authorized by the PegOut datum's `owner_auth`) burns the locked fBTC by spending the PegOut UTxO, providing the raw Treasury Movement transaction with a Binocular inclusion proof of its confirmation; the validator verifies the TM spends the treasury outpoint named in the datum and pays the destination, and records the completion in the completed-peg-outs tree.
+  * **bridged-token.ak**: minting and burning of bridged assets (e.g. fBTC). The depositor mints fBTC by spending the PegInRequest UTxO and providing: a Binocular inclusion proof of the confirmed Treasury Movement transaction, a reference to the corresponding `TreasuryMovementValidator` UTxO (to verify the confirmed transaction matches what SPOs signed and posted), a non-membership proof against the completed-peg-ins trie (its own NFT-authenticated singleton — see below) (preventing double minting), and a **BIP-322** signature (from the Taproot address whose output key is the beacon's `Q_auth`) proving ownership. The validator verifies the Binocular-confirmed txid matches the `TreasuryMovementValidator` datum (proving the confirmed transaction matches what was posted by the protocol's signing cascade), parses the raw TM transaction to verify the depositor's peg-in txid+vout appears as an input (proving the Treasury Movement actually swept the deposit), verifies the depositor's BIP-322 signature against the `Q_auth` recorded in the PegInDatum (bound to the deposit's beacon at mint time), verifies the peg-in is not already in the completed trie, and mints the correct amount of fBTC to whatever Cardano address the depositor specifies in the transaction outputs. The minting transaction also inserts the peg-in into the completed-peg-ins trie. The withdrawer (authorized by the PegOut datum's `owner_auth`) burns the locked fBTC by spending the PegOut UTxO, providing the raw Treasury Movement transaction with a Binocular inclusion proof of its confirmation; the validator verifies the TM spends the treasury outpoint named in the datum and pays the destination, and records the completion in the completed-peg-outs trie.
 
 ## Components relationships
 
@@ -345,11 +346,11 @@ Bifrost logic is fully encapsulated in the following solutions:
 
 Watchtowers, who run the watchtower program, challenge each other to be the first to post the best source blockchain chain of valid blocks in the Binocular Oracle smart contract. The winner for each chain is rewarded with some ADA, proportionally for each valid block posted (oracle reward funding and amounts are defined by Binocular [1], which is normative for oracle economics).
 
-Depositors, who want to peg-in, send their source blockchain assets to a unique Taproot address with an OP_RETURN metadata marker identifying the transaction as a Bifrost peg-in. They then create PegInRequest UTxOs on Cardano (peg_in.ak) by minting an NFT and providing an inclusion proof. The PegInRequest UTxO creation could be potentially delegated to automated services but fundamentally the depositors have full control of this process.
+Depositors, who want to peg-in, send their source blockchain assets to a unique Taproot address with an OP_RETURN metadata marker identifying the transaction as a Bifrost peg-in. They then create PegInRequest UTxOs on Cardano (peg-in.ak) by minting an NFT and providing an inclusion proof. The PegInRequest UTxO creation could be potentially delegated to automated services but fundamentally the depositors have full control of this process.
 
-Withdrawers, who want to peg-out, lock their bridged assets (e.g. fBTC) at peg_out.ak, specifying their source blockchain destination address in the datum.
+Withdrawers, who want to peg-out, lock their bridged assets (e.g. fBTC) at peg-out.ak, specifying their source blockchain destination address in the datum.
 
-SPOs, who register with their delegated stake to join the next epoch in spos_registry.ak, are identified on-chain by their cold-key-derived `pool_id` and authorize a separate Bifrost Secp256k1 identity key for DKG and signing communication. Registration itself is **stake-blind** (a validator cannot read the stake distribution); the `min_stake` filter (Operational parameters UTxO) is applied off-chain at each epoch's candidate enumeration, so an under-staked registrant simply never enters a candidate set — and becomes eligible automatically once its stake grows, with no re-registration.
+SPOs, who register with their delegated stake to join the next epoch in spos-registry.ak, are identified on-chain by their cold-key-derived `pool_id` and authorize a separate Bifrost Secp256k1 identity key for DKG and signing communication. Registration itself is **stake-blind** (a validator cannot read the stake distribution); the `min_stake` filter (Operational parameters UTxO) is applied off-chain at each epoch's candidate enumeration, so an under-staked registrant simply never enters a candidate set — and becomes eligible automatically once its stake grows, with no re-registration.
 
 At the end of each epoch, the registered SPOs (that normally also include the old group) verify each other's delegated stake to ensure honesty and participate in a DKG ceremony to generate their new shared multisignature address.
 
@@ -381,8 +382,8 @@ In the 51% mode, the SPOs sign this transaction using FROST group signing and po
 
 Once the Treasury Movement transaction is confirmed on the source blockchain, the bridging operations can be completed on Cardano:
 
-* For peg-ins: the depositor spends the PegInRequest UTxO and provides a Binocular inclusion proof of the confirmed Treasury Movement transaction and a reference to the corresponding `TreasuryMovementValidator` UTxO — the validator verifies the confirmed txid matches the posted datum, proving the confirmed transaction matches what was posted by the protocol's signing cascade (not, e.g., a depositor timeout reclaim). The validator parses the raw TM transaction to verify the depositor's peg-in txid+vout appears as an input (proving the TM actually swept this deposit), and parses the raw peg-in transaction from the PegInRequest datum to check the deposit data. The depositor additionally provides a non-inclusion proof against the completed-peg-ins tree (its own NFT-authenticated singleton UTxO) and a **BIP-322** signature under the beacon's `Q_auth`, proving ownership. This mints the corresponding fBTC to a Cardano address of the depositor's choice and inserts the peg-in into the completed peg-ins trie to prevent double minting.
-* For peg-outs: the withdrawer (per `owner_auth`) spends the PegOut UTxO, providing the raw Treasury Movement transaction and a Binocular inclusion proof of its confirmation — the validator verifies the TM spends the treasury outpoint named in the PegOut datum and pays the destination the net amount, records the completion in the completed-peg-outs tree, burns the locked fBTC, and returns the min_utxo ADA.
+* For peg-ins: the depositor spends the PegInRequest UTxO and provides a Binocular inclusion proof of the confirmed Treasury Movement transaction and a reference to the corresponding `TreasuryMovementValidator` UTxO — the validator verifies the confirmed txid matches the posted datum, proving the confirmed transaction matches what was posted by the protocol's signing cascade (not, e.g., a depositor timeout reclaim). The validator parses the raw TM transaction to verify the depositor's peg-in txid+vout appears as an input (proving the TM actually swept this deposit), and parses the raw peg-in transaction from the PegInRequest datum to check the deposit data. The depositor additionally provides a non-membership proof against the completed-peg-ins trie (its own NFT-authenticated singleton UTxO) and a **BIP-322** signature under the beacon's `Q_auth`, proving ownership. This mints the corresponding fBTC to a Cardano address of the depositor's choice and inserts the peg-in into the completed-peg-ins trie to prevent double minting.
+* For peg-outs: the withdrawer (per `owner_auth`) spends the PegOut UTxO, providing the raw Treasury Movement transaction and a Binocular inclusion proof of its confirmation — the validator verifies the TM spends the treasury outpoint named in the PegOut datum and pays the destination the net amount, records the completion in the completed-peg-outs trie, burns the locked fBTC, and returns the min_utxo ADA.
 
 Peg-out completion is authorized by the peg-out's `owner_auth` — but the withdrawer needs no completion to be paid: the BTC payout happens when the TM confirms on Bitcoin; completion only burns the fBTC and reclaims the MIN_ADA. Peg-in completion requires the depositor's action (signature), which gives the depositor full control over the Cardano destination address.
 
@@ -541,7 +542,7 @@ classDiagram
         user_source_chain_pub_key : ByteArray
     }
 
-    class PegOutRequest_UTxO {
+    class PegOut_UTxO {
         <<peg-out.ak · no token, holds locked fBTC>>
         owner_auth : AuthorizationMethod
         source_chain_destination_address : ByteArray
@@ -576,7 +577,7 @@ classDiagram
     }
 
     Confirmed ..> PegInRequest_UTxO : swept_peg_in_utxo_ids contains peg_in_utxo_id
-    Confirmed ..> PegOutRequest_UTxO : fulfilled_peg_outs pays destination
+    Confirmed ..> PegOut_UTxO : fulfilled_peg_outs pays destination
 ```
 
 * **PegInRequest** – created permissionlessly with a Binocular inclusion proof of the Bitcoin
@@ -791,8 +792,8 @@ is wiring (#19–20 below):
 | 0–1 | `bridged_token_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — fBTC (bridged asset) identity |
 | 2–3 | `source_chain_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — source-chain state tree identity |
 | 4–5 | `block_header_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — block-header tree identity |
-| 6–7 | `completed_peg_ins_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — completed-peg-ins tree identity |
-| 8–9 | `completed_peg_outs_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — completed-peg-outs tree identity |
+| 6–7 | `completed_peg_ins_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — completed-peg-ins trie identity |
+| 8–9 | `completed_peg_outs_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — completed-peg-outs trie identity |
 | 10 | `peg_in_withdraw_script_hash` | ByteArray (script hash) | **immutable** — peg-in spend logic (withdraw-script pattern) |
 | 11 | `peg_out_withdraw_script_hash` | ByteArray (script hash) | **immutable** — peg-out spend logic (withdraw-script pattern) |
 | 12 | `legit_treasury_movement_and_peg_in_spent_verifier_script_hash` | ByteArray (script hash) | **immutable** — peg-in close verifier |
@@ -816,7 +817,7 @@ reader trusts a datum only if the UTxO's value contains the NFT.
   The consuming validator is parameterized by `(config_nft_policy_id, config_nft_asset_name)`; it
   locates the reference input whose value holds exactly that NFT (typically via an index passed in
   the redeemer) and decodes the inline datum **positionally** — a Plutus datum is a `Constr`, so
-  field *n* in the table above is element *n*. Example: `peg_out.ak` reads fields 11 (its
+  field *n* in the table above is element *n*. Example: `peg-out.ak` reads fields 11 (its
   withdraw script) and 13 (the completion verifier).
 * **Off-chain**: query the ledger for the UTxO holding the asset `(config_nft_policy_id,
   config_nft_asset_name)` (any chain indexer resolves an NFT to its UTxO), read its inline datum,
@@ -963,9 +964,9 @@ operator performs:
    (Reference-script UTxOs must be excluded from this selection — spending one destroys a deployed
    reference script.)
 3. **Compute the contract set.** From the validator blueprint, the oracle policy id, and the chosen
-   one-shot outpoints, compute all cross-referenced script hashes: the fBTC (`bridged_asset`)
-   policy, `peg_in` / `peg_out` (+ their withdraw scripts), the completion verifier scripts, the
-   completed-peg-ins / completed-peg-outs tree policies, and the TM policy with its mint gate.
+   one-shot outpoints, compute all cross-referenced script hashes: the fBTC (`bridged-token`)
+   policy, `peg-in` / `peg-out` (+ their withdraw scripts), the completion verifier scripts, the
+   completed-peg-ins / completed-peg-outs trie policies, and the TM policy with its mint gate.
 4. **Mint the Config NFT** (`config.ak`), creating the Config UTxO whose datum is the spine of the
    instance: it records every cross-referenced script hash and token identity (bridged token,
    block-header tree, completed-peg-ins/-outs trees, peg-in/peg-out withdraw scripts, the peg-out
@@ -978,9 +979,9 @@ operator performs:
    instance**: a different Config UTxO implies a different fBTC policy, i.e. a *new*,
    non-fungible bridge instance. See §Config UTxO for the datum layout (wiring vs parameters) and
    the governance update path.
-5. **Mint the completed-peg-ins tree NFT** — its UTxO carries the MPF root, initialized to the
+5. **Mint the completed-peg-ins trie NFT** — its UTxO carries the MPF root, initialized to the
    empty root (32 zero bytes).
-6. **Mint the completed-peg-outs tree NFT** — likewise with the empty root.
+6. **Mint the completed-peg-outs trie NFT** — likewise with the empty root.
 7. ~~Mint the TM-control UTxO~~ — **removed**: TM records mint permissionlessly, gated by the
    TM-chain linkage check against the Config's initial treasury outpoint or the predecessor
    Confirmed record (see *Post signed TM*). The interim `TMCTRL` authorized-minter singleton has
@@ -1016,13 +1017,13 @@ These are the steps to execute a correct peg-in:
 * Check the status of Bifrost: if the bridge is correctly operational and we are not too near the end of the current Cardano epoch, the peg-in can be done.
 * Retrieve the current Treasury key $Y_{51}$ from `treasury.ak` on Cardano (published there after each DKG).
 * On Bitcoin, send the amount of BTC to peg-in to a Taproot address derived from $Y_{51}$, the federation fallback script, and the depositor's timeout refund script (see **Taproot address construction** below). The address has three spending paths: the $Y_{51}$ key path (for SPO sweep — main line), a $Y_{federation}$ script leaf (for federation emergency sweep after timeout), and a script leaf allowing the depositor to reclaim after ~30 days. The transaction must include an OP_RETURN **beacon**: `"BFR" ‖ D (32 B) ‖ Q_auth (32 B)` (67 bytes) — `D` is the depositor's x-only refund key (SPOs need it to reconstruct the refund leaf and compute the key-path sweep tweak), and `Q_auth` is the Taproot output key of the wallet that will sign the BIP-322 completion (by default `Q_auth = BIP86(D)`; a different wallet's key may be used — authorization is decoupled from funding).
-* Wait for watchtowers to detect the Bitcoin transaction, post the corresponding Bitcoin block to the Binocular Oracle, and create a PegInRequest UTxO on Cardano (peg_in.ak) by minting a PegInRequest NFT and providing a transaction inclusion proof.
+* Wait for watchtowers to detect the Bitcoin transaction, post the corresponding Bitcoin block to the Binocular Oracle, and create a PegInRequest UTxO on Cardano (peg-in.ak) by minting a PegInRequest NFT and providing a transaction inclusion proof.
 * Wait for the peg-in to be included in the Treasury Movement transaction at the next epoch boundary. In the normal 51% mode, SPOs sign this transaction with FROST and post it to Cardano (`TreasuryMovementValidator`); in the emergency mode, the federation satisfies the $Y_{federation}$ fallback script path instead. Watchtowers then relay the signed transaction to Bitcoin.
-* Once the Treasury Movement transaction is confirmed on Bitcoin, the depositor completes the peg-in on Cardano by spending the PegInRequest UTxO and providing: a Binocular inclusion proof of the confirmed Treasury Movement transaction, a reference to the corresponding `TreasuryMovementValidator` UTxO (the validator verifies the confirmed txid matches the posted datum, proving the confirmed transaction matches what was posted by the protocol's signing cascade), a non-inclusion proof against the completed-peg-ins tree (preventing double minting), and a **BIP-322** signature under the beacon's `Q_auth`, proving ownership. The validator parses the raw TM transaction to verify the depositor's peg-in txid+vout appears as an input (confirming the Treasury Movement actually swept this deposit), and parses the raw peg-in transaction from the PegInRequest datum to check the deposit data (this is the only point where the peg-in transaction is parsed on-chain). This mints the correct amount of fBTC to whatever Cardano address the depositor chooses and inserts the peg-in into the completed-peg-ins tree.
+* Once the Treasury Movement transaction is confirmed on Bitcoin, the depositor completes the peg-in on Cardano by spending the PegInRequest UTxO and providing: a Binocular inclusion proof of the confirmed Treasury Movement transaction, a reference to the corresponding `TreasuryMovementValidator` UTxO (the validator verifies the confirmed txid matches the posted datum, proving the confirmed transaction matches what was posted by the protocol's signing cascade), a non-membership proof against the completed-peg-ins trie (preventing double minting), and a **BIP-322** signature under the beacon's `Q_auth`, proving ownership. The validator parses the raw TM transaction to verify the depositor's peg-in txid+vout appears as an input (confirming the Treasury Movement actually swept this deposit), and parses the raw peg-in transaction from the PegInRequest datum to check the deposit data (this is the only point where the peg-in transaction is parsed on-chain). This mints the correct amount of fBTC to whatever Cardano address the depositor chooses and inserts the peg-in into the completed-peg-ins trie.
 * If the peg-in was not included in the Treasury Movement transaction (e.g., it arrived too late in the epoch), it rolls over to the next epoch. If the Treasury key has rotated and the peg-in can no longer be swept, the depositor uses the ~30-day timeout spending path to reclaim their BTC and can retry with the new Treasury address.
 * **PegInRequest closure**: A PegInRequest UTxO can be closed (NFT burned, min_utxo ADA reclaimed by the creator) under two conditions:
   * **After depositor timeout reclaim**: the creator provides a Binocular inclusion proof of a confirmed Bitcoin transaction that spends the peg-in txid+vout via the **depositor refund script leaf** (not the federation leaf, not the key path). The on-chain validator parses the Bitcoin transaction witness to verify it is a script-path spend using the depositor refund script specifically, not a key-path spend (which would be an SPO sweep) or a federation script-path spend (which would also be a legitimate sweep). This ensures closure cannot grief a depositor whose funds were legitimately swept by either SPOs or the federation.
-  * **Duplicate PegInRequest**: the creator provides a **trie inclusion proof** showing the peg-in is already in the completed-peg-ins tree (its own NFT-authenticated singleton UTxO). This means fBTC was already minted via another PegInRequest for the same deposit, so this one is redundant.
+  * **Duplicate PegInRequest**: the creator provides a **trie membership proof** showing the peg-in is already in the completed-peg-ins trie (its own NFT-authenticated singleton UTxO). This means fBTC was already minted via another PegInRequest for the same deposit, so this one is redundant.
 
 ### End-to-end peg-in sequence
 
@@ -1035,9 +1036,9 @@ sequenceDiagram
     participant BTC as Bitcoin network
     participant WT as Watchtower program
     participant Bin as Binocular Oracle<br/>(Cardano)
-    participant PIN as peg_in.ak<br/>(Cardano)
+    participant PIN as peg-in.ak<br/>(Cardano)
     participant TMC as TreasuryMovementValidator<br/>(Cardano)
-    participant TRE as treasury.ak / bridged_asset.ak<br/>(Cardano)
+    participant TRE as treasury.ak / bridged-token.ak<br/>(Cardano)
     participant SPO as SPO program<br/>(current roster)
 
     Note over Dep,TRE: Phase 1 — Bitcoin deposit
@@ -1062,7 +1063,7 @@ sequenceDiagram
     PIN-->>Bin: Verify both proofs against the confirmed-chain root<br/>(Binocular read via reference input)
 
     Note over PIN,SPO: Phase 4 — Treasury Movement build and signing (per TM batch)
-    SPO->>PIN: Read confirmed PegInRequest UTxOs (pegs snapshot, FIFO)
+    SPO->>PIN: Read confirmed PegInRequest UTxOs (batch snapshot, FIFO)
     SPO->>SPO: Verify peg-in Taproot address off-chain, then<br/>deterministically build the unsigned TM<br/>(sweep peg-ins, pay peg-outs, move treasury)
     SPO->>SPO: FROST signing cascade over bifrost_url pull model:<br/>Round 1 nonce commitments → Round 2 partial signatures<br/>(51% key path — federation script path on failure)
     SPO->>TMC: Elected leader posts signed TM as Unconfirmed TM tx<br/>(mints TM NFT)
@@ -1075,10 +1076,10 @@ sequenceDiagram
 
     Note over Dep,TRE: Phase 6 — Completion: mint fBTC (single Cardano tx)
     Dep->>PIN: Spend PegInRequest UTxO (burn PegInRequest NFT)
-    Dep->>TRE: Reference Confirmed TM tx — provide Schnorr signature over<br/>"BFR-mint-v1" ‖ btc_txid ‖ peg_in_utxo_id ‖ chosen_address<br/>+ MPT non-inclusion proof, insert peg-in into completed-peg-ins trie
+    Dep->>TRE: Reference Confirmed TM tx — provide Schnorr signature over<br/>"BFR-mint-v1" ‖ btc_txid ‖ peg_in_utxo_id ‖ chosen_address<br/>+ MPF non-membership proof, insert peg-in into completed-peg-ins trie
     TRE-->>Dep: fBTC minted to the depositor-chosen Cardano address<br/>(one output pays the leader reward)
 
-    alt Peg-in missed by this TM (e.g. arrived after the pegs snapshot)
+    alt Peg-in missed by this TM (e.g. arrived after the batch snapshot)
         Note over Dep,SPO: Rolls over to a later TM batch / next epoch
     else Treasury key rotated before sweep
         Dep->>BTC: Reclaim BTC via the depositor refund leaf<br/>after ~30 days (4320 blocks), then retry
@@ -1200,7 +1201,7 @@ After ~30 days (4320 blocks), the depositor reveals the depositor refund script 
 
 #### Taproot address verification
 
-Plutus V3 does not expose secp256k1 point arithmetic builtins (only `verifySchnorrSecp256k1Signature` and `verifyEcdsaSecp256k1Signature`), so `peg_in.ak` **cannot** reconstruct $Q$ from $Y_{51}$, $Y_{federation}$, and the depositor's script on-chain.
+Plutus V3 does not expose secp256k1 point arithmetic builtins (only `verifySchnorrSecp256k1Signature` and `verifyEcdsaSecp256k1Signature`), so `peg-in.ak` **cannot** reconstruct $Q$ from $Y_{51}$, $Y_{federation}$, and the depositor's script on-chain.
 
 Instead, Taproot address correctness is verified **off-chain by SPOs**: before including a peg-in in the Treasury Movement transaction, each SPO independently reconstructs the expected peg-in Taproot address from $Y_{51}$, $Y_{federation}$, and the depositor's refund key `D` (read from the beacon in the PegInRequest datum), and verifies it matches the Bitcoin transaction output. SPOs will not sign a Treasury Movement transaction that spends UTxOs they cannot actually spend.
 
@@ -1217,9 +1218,9 @@ A user who wants to move his BTC from Cardano to Bitcoin is called a withdrawer.
 These are the steps to execute a correct peg-out:
 
 * Check the status of Bifrost: if the bridge is correctly operational and we are not too near the end of the current Cardano epoch, the peg-out can be done.
-* On Cardano, lock the correct amount of fBTC plus MIN_ADA at the peg_out.ak spend script (a plain payment to the script address — nothing is minted). The datum contains the Bitcoin destination address where BTC should be sent (`source_chain_destination_address`) and the current Bitcoin treasury outpoint (`source_chain_treasury_utxo_id`) that the paying Treasury Movement must spend — known from the previous TM's new treasury output (output 0, the TM-chain tip). Naming a stale outpoint makes the peg-out unfulfillable (it can only be cancelled), so the peg-out must be created against the current treasury state. Request-building software must validate before submitting (see *Create PegOut request* — client-side checks): two mistakes — an undecodable datum, a nonexistent treasury outpoint — are permanently unrecoverable.
+* On Cardano, lock the correct amount of fBTC plus MIN_ADA at the peg-out.ak spend script (a plain payment to the script address — nothing is minted). The datum contains the Bitcoin destination address where BTC should be sent (`source_chain_destination_address`) and the current Bitcoin treasury outpoint (`source_chain_treasury_utxo_id`) that the paying Treasury Movement must spend — known from the previous TM's new treasury output (output 0, the TM-chain tip). Naming a stale outpoint makes the peg-out unfulfillable (it can only be cancelled), so the peg-out must be created against the current treasury state. Request-building software must validate before submitting (see *Create PegOut request* — client-side checks): two mistakes — an undecodable datum, a nonexistent treasury outpoint — are permanently unrecoverable.
 * Wait for the peg-out to be included in the Treasury Movement transaction at the next epoch boundary. In the normal 51% mode, SPOs sign this transaction with FROST and post it to Cardano (`TreasuryMovementValidator`); in the emergency mode, the federation satisfies the $Y_{federation}$ fallback script path instead. Watchtowers then relay the signed transaction to Bitcoin. At this point, the withdrawer has received BTC at their specified Bitcoin address.
-* Once the Treasury Movement transaction is confirmed on Bitcoin (100 Bitcoin blocks for Binocular confirmation), the withdrawer (per `owner_auth`) completes the peg-out on Cardano by providing the raw TM transaction, a Binocular inclusion proof of its confirmation, and a non-membership proof against the completed-peg-outs tree. This burns the locked fBTC, records the completion, and returns the MIN_ADA to the withdrawer.
+* Once the Treasury Movement transaction is confirmed on Bitcoin (100 Bitcoin blocks for Binocular confirmation), the withdrawer (per `owner_auth`) completes the peg-out on Cardano by providing the raw TM transaction, a Binocular inclusion proof of its confirmation, and a non-membership proof against the completed-peg-outs trie. This burns the locked fBTC, records the completion, and returns the MIN_ADA to the withdrawer.
 * If the Treasury Movement did not include the peg-out payment, the withdrawer cancels: once the transaction that spent the named treasury outpoint is Binocular-confirmed, they present it together with proof that it contains no output paying their destination (see *Cancel PegOut request*), unlocking their fBTC to try again against the new treasury outpoint.
 
 ### End-to-end peg-out sequence
@@ -1233,7 +1234,7 @@ sequenceDiagram
     participant BTC as Bitcoin network
     participant WT as Watchtower program
     participant Bin as Binocular Oracle<br/>(Cardano)
-    participant POUT as peg_out.ak<br/>(Cardano)
+    participant POUT as peg-out.ak<br/>(Cardano)
     participant TMC as TreasuryMovementValidator<br/>(Cardano)
     participant SPO as SPO program<br/>(current roster)
 
@@ -1241,7 +1242,7 @@ sequenceDiagram
     Wdr->>POUT: Create PegOut UTxO — lock fBTC + MIN_ADA (nothing minted),<br/>datum = { owner_auth, source_chain_destination_address,<br/>source_chain_treasury_utxo_id, per_pegout_fee }
 
     Note over POUT,SPO: Phase 2 — Treasury Movement build and signing (per TM batch)
-    SPO->>POUT: Read pending PegOut UTxOs (pegs snapshot, FIFO,<br/>past the Cardano stability window)
+    SPO->>POUT: Read pending PegOut UTxOs (batch snapshot, FIFO,<br/>past the Cardano stability window)
     SPO->>SPO: Deterministically build the unsigned TM — one output per<br/>peg-out paying btc_destination_scriptPubKey<br/>(amount − per-peg-out protocol fee)
     SPO->>SPO: FROST signing cascade over bifrost_url pull model:<br/>Round 1 nonce commitments → Round 2 partial signatures<br/>(51% key path — federation script path on failure)
     SPO->>TMC: Elected leader posts signed TM as Unconfirmed TM tx<br/>(mints TM NFT)
@@ -1260,7 +1261,7 @@ sequenceDiagram
     POUT-->>Wdr: MIN_ADA returned to the withdrawer
 
     alt TM did not include the peg-out payment
-        Wdr->>POUT: Unlock fBTC with a Binocular exclusion proof<br/>and retry in the next epoch
+        Wdr->>POUT: Cancel — present the Binocular-confirmed TM that spent<br/>the named treasury outpoint and prove it pays no output<br/>to the destination; unlock fBTC and retry
     end
 ```
 
@@ -1395,7 +1396,7 @@ order is normative); the previous 2-field table disagreed with the fields §Comp
 | 0 | `owner_auth` | `AuthorizationMethod` | authority that can later `Cancel` (close) this request |
 | 1 | `source_chain_peg_in_raw_tx` | `ByteArray` | raw (witness-stripped) BTC peg-in deposit tx bytes |
 | 2 | `source_chain_peg_in_raw_tx_index` | `Int` | the deposit tx's index in its block (for the Merkle proof) |
-| 3 | `peg_in_utxo_id` | `ByteArray` (txid ‖ vout LE) | the deposit outpoint on Bitcoin — the UTxO the TM sweeps; key of the completed-peg-ins tree |
+| 3 | `peg_in_utxo_id` | `ByteArray` (txid ‖ vout LE) | the deposit outpoint on Bitcoin — the UTxO the TM sweeps; key of the completed-peg-ins trie |
 | 4 | `source_chain_treasury_utxo_id` | `ByteArray` | the treasury outpoint current when the request was created — identifies the key era the deposit address was derived against (used by SPO off-chain address reconstruction) |
 | 5 | `peg_in_amount` | `Int` (satoshi) | the deposit amount — the fBTC quantity minted at completion |
 | 6 | `user_source_chain_pub_key` | `ByteArray` (32 B x-only) | the depositor's auth key — the beacon's `Q_auth`, the key the BIP-322 completion signature verifies under |
@@ -1417,7 +1418,7 @@ Per-request payload:
 | raw BTC peg-in tx | output datum | ~400 B |
 | `owner_auth` | output datum | ~48 B |
 | BTC block header | mint redeemer | 80 B |
-| MPT inclusion proof (header ∈ confirmed chain) | mint redeemer | ~600 B |
+| Binocular inclusion proof (header ∈ confirmed chain) | mint redeemer | ~600 B |
 | Bitcoin Merkle proof (tx ∈ block) | mint redeemer | ~320 B |
 | NFT (asset name + qty, in mint + output value) | tx body | ~50 B |
 | Output overhead (address + value bag wrapper) | tx body | ~60 B |
@@ -1425,7 +1426,7 @@ Per-request payload:
 
 Fixed per-tx overhead (creator input, oracle reference input, change output, signature, tx header, script integrity hash): **~400 B**.
 
-At ~1.56 KB per request, byte size caps a batch at **~10 requests per tx** before hitting Cardano's 16 KB limit. Execution-unit memory (~14 M) is expected to converge on the same ~10-per-batch ceiling — per-request exec cost is dominated by the MPT + Merkle proof verifications and scales linearly.
+At ~1.56 KB per request, byte size caps a batch at **~10 requests per tx** before hitting Cardano's 16 KB limit. Execution-unit memory (~14 M) is expected to converge on the same ~10-per-batch ceiling — per-request exec cost is dominated by the MPF + Merkle proof verifications and scales linearly.
 
 Fee comparison (mainnet params: $a = 0.155$ ADA, $b = 4.4 \times 10^{-5}$ ADA/byte; exec: $7.21 \times 10^{-5}$ ADA/step, $5.77 \times 10^{-2}$ ADA/mem):
 
@@ -1447,7 +1448,7 @@ Batching 10 saves ~1.7 ADA (~50%) — meaningful at scale but not load-bearing. 
 ```mermaid
 flowchart LR
   wdraw["Withdrawer UTxO<br/>fBTC + ADA"] --> tx{{"Create PegOut request"}}
-  tx --> pout["PegOut UTxO @ peg_out.ak<br/>fBTC + MIN_ADA<br/>datum: { owner_auth, dest_address,<br/>treasury_utxo_id, per_pegout_fee }"]
+  tx --> pout["PegOut UTxO @ peg-out.ak<br/>fBTC + MIN_ADA<br/>datum: { owner_auth, dest_address,<br/>treasury_utxo_id, per_pegout_fee }"]
   tx --> change["Change → withdrawer"]
 ```
 
@@ -1458,7 +1459,7 @@ flowchart LR
 | **Inputs** | Withdrawer UTxO — holds the fBTC to lock + ADA for fees + MIN_ADA |
 | **Reference inputs** | — |
 | **Mint** | — |
-| **Outputs** | PegOut UTxO @ `peg_out.ak` — holds the locked fBTC + MIN_ADA; datum = `{ owner_auth, source_chain_destination_address, source_chain_treasury_utxo_id, per_pegout_fee }` |
+| **Outputs** | PegOut UTxO @ `peg-out.ak` — holds the locked fBTC + MIN_ADA; datum = `{ owner_auth, source_chain_destination_address, source_chain_treasury_utxo_id, per_pegout_fee }` |
 | **Witness data (redeemer)** | — (a plain payment to a script address; the validator runs only on spend) |
 | **Validity interval** | unconstrained |
 | **Size (est.)** | ~0.5 KB (no script execution; fee ≈ 0.18 ADA) |
@@ -1684,14 +1685,14 @@ flowchart LR
 
 | Role | Content |
 |------|---------|
-| **Inputs** | PegInRequest UTxO; Completed-peg-ins tree UTxO (MPF root update); Depositor UTxO (fees) |
+| **Inputs** | PegInRequest UTxO; Completed-peg-ins trie UTxO (MPF root update); Depositor UTxO (fees) |
 | **Reference inputs** | `Confirmed TM tx` UTxO — provides `swept_peg_in_utxo_ids` and `btc_txid`; authenticated by its TM NFT |
 | **Mint** | +`peg_in_amount` fBTC; −1 PegInRequest NFT |
-| **Outputs** | Updated Completed-peg-ins tree UTxO (new MPF root including this peg-in; same NFT, same address); fBTC → depositor-chosen address; change |
-| **Witness data (redeemer)** | depositor's x-only BTC pubkey + Schnorr signature; non-inclusion proof of peg-in in the current MPT + updated-root proof |
+| **Outputs** | Updated Completed-peg-ins trie UTxO (new MPF root including this peg-in; same NFT, same address); fBTC → depositor-chosen address; change |
+| **Witness data (redeemer)** | depositor's x-only BTC pubkey + Schnorr signature; non-membership proof of the peg-in against the current MPF root + updated-root proof |
 | **Validity interval** | unconstrained |
 | **Required signers** | depositor (fee spend) |
-| **Size (est.)** | ~2.7 KB per mint: redeemer ~1.3 KB (Schnorr sig + pubkey + two MPT proofs at ~600 B each); input datum ~500 B (PegInRequest). Fee ≈ 0.37 ADA. Membership check against `swept_peg_in_utxo_ids` scales with list length (up to 100 entries). |
+| **Size (est.)** | ~2.7 KB per mint: redeemer ~1.3 KB (Schnorr sig + pubkey + two MPF proofs at ~600 B each); input datum ~500 B (PegInRequest). Fee ≈ 0.37 ADA. Membership check against `swept_peg_in_utxo_ids` scales with list length (up to 100 entries). |
 
 **Checks enforced on-chain**
 
@@ -1715,8 +1716,8 @@ flowchart LR
   * `"BFR-mint-v1"` — domain-separation tag (BIP340 practice).
   * `peg_in_utxo_id` — binds the signature to **this specific peg-in**. Without it, if a depositor reused the same BTC pubkey across multiple peg-ins in the same TM, publishing the signature to claim one would let an attacker replay it to claim the others.
   * `chosen_cardano_address` — binds the signature to the **destination the depositor chose**. Prevents reorg-based front-running where an attacker replays the signature with their own Cardano address after a short chain reorganisation of the depositor's mint tx.
-* Peg-in is **not yet** in the completed-peg-ins MPT (non-inclusion proof).
-* Peg-in **is** in the new MPT root in the output (prevents double-mint).
+* Peg-in is **not yet** in the completed-peg-ins trie (MPF non-membership proof).
+* Peg-in **is** in the new MPF root in the output (prevents double-mint).
 * fBTC minted equals the amount parsed from the raw BTC peg-in tx.
 * One output pays the referenced Confirmed record's pinned `leader_reward` to its `poster` identity (see *Leader reward*).
 * PegInRequest NFT is burned.
@@ -1736,9 +1737,9 @@ flowchart LR
 ### Complete peg-out / burn fBTC (Cardano)
 
 <!-- G28: this section documents the implemented completion scheme (peg-out.ak + the
-     legit_treasury_movement_and_peg_out_produced verifier + the completed-peg-outs tree);
+     legit_treasury_movement_and_peg_out_produced verifier + the completed-peg-outs trie);
      the earlier Confirmed-TM-reference + fulfilled_peg_outs-index design is superseded. -->
-**Purpose**: unlock the PegOut UTxO once the TM that fulfilled it is Binocular-confirmed — burning the locked fBTC (full gross), recording the completion in the completed-peg-outs tree, and returning MIN_ADA to the withdrawer.
+**Purpose**: unlock the PegOut UTxO once the TM that fulfilled it is Binocular-confirmed — burning the locked fBTC (full gross), recording the completion in the completed-peg-outs trie, and returning MIN_ADA to the withdrawer.
 
 **Who**: the withdrawer — completion must satisfy the PegOut datum's `owner_auth`.
 **Trigger**: the TM that paid this peg-out is Binocular-confirmed (≥100 Bitcoin blocks + 200 min challenge).
@@ -1767,7 +1768,7 @@ flowchart LR
 | **Required signers** | per `owner_auth` |
 | **Size (est.)** | dominated by the raw TM carried in the redeemer: ~1.5 KB for a small TM; ~12–13 KB near the 100+100 batch ceiling (witness-stripped TM ~10.4 KB + proofs). Exec cost scales with the on-chain TM byte-scan. |
 
-**Checks enforced on-chain** (`peg_out.ak` spend, delegated to its withdraw script)
+**Checks enforced on-chain** (`peg-out.ak` spend, delegated to its withdraw script)
 
 * The supplied block header is in Binocular's confirmed-chain root, and the TM tx is Merkle-included in that block (txid = `sha256d` of the witness-stripped TM bytes).
 * Completion is authorized per the PegOut datum's `owner_auth`.
@@ -1780,8 +1781,8 @@ flowchart LR
      Operational parameters UTxO). The current implementation runs with `per_pegout_fee = 0`, so
      the check is exact equality — forward-compatible.
 
-  `peg_out.ak` cross-checks the verifier's redeemer fields against the spent PegOut datum, the locked fBTC quantity, `peg_out_utxo_id`, and the supplied raw TM bytes.
-* `peg_out_utxo_id` is **not yet** in the completed-peg-outs tree (MPF non-membership proof), and **is** inserted into the updated root of the continuing Completed-peg-outs output — making each completion once-only.
+  `peg-out.ak` cross-checks the verifier's redeemer fields against the spent PegOut datum, the locked fBTC quantity, `peg_out_utxo_id`, and the supplied raw TM bytes.
+* `peg_out_utxo_id` is **not yet** in the completed-peg-outs trie (MPF non-membership proof), and **is** inserted into the updated root of the continuing Completed-peg-outs output — making each completion once-only.
 * Burned fBTC equals the full (gross) fBTC held in the PegOut UTxO.
 * MIN_ADA is returned to the original withdrawer.
 
@@ -1789,7 +1790,7 @@ flowchart LR
 > treasury outpoint the paying TM must spend. A Bitcoin outpoint is spendable exactly once, so at
 > most one confirmed TM can ever satisfy a given peg-out — an output of an older TM can never be
 > claimed by a newer peg-out (the older TM spent a different treasury outpoint). The
-> completed-peg-outs tree additionally makes each PegOut's completion once-only. Residual footgun
+> completed-peg-outs trie additionally makes each PegOut's completion once-only. Residual footgun
 > (not a theft vector): the owner of a peg-out that was *not* actually paid (e.g. it named an
 > already-spent treasury outpoint) can still burn their own fBTC against that TM if destination and
 > amount happen to match one of its outputs — the treasury ends up in surplus, never deficit, and
@@ -1834,7 +1835,7 @@ flowchart LR
 | **Validity interval** | unconstrained |
 | **Required signers** | per `owner_auth` |
 
-**Checks enforced on-chain** (`peg_out.ak` spend, `Cancel` action)
+**Checks enforced on-chain** (`peg-out.ak` spend, `Cancel` action)
 
 * The supplied block header is in Binocular's confirmed-chain root; the supplied tx is
   Merkle-included in that block.
@@ -1875,7 +1876,7 @@ complete.
 | Role | Content |
 |------|---------|
 | **Inputs** | PegInRequest UTxO; creator UTxO (fees) |
-| **Reference inputs** | branch (a): Binocular Oracle; branch (b): completed-peg-ins tree UTxO |
+| **Reference inputs** | branch (a): Binocular Oracle; branch (b): completed-peg-ins trie UTxO |
 | **Mint** | −1 PegInRequest NFT |
 | **Outputs** | MIN_ADA → creator; change |
 | **Witness data (redeemer)** | branch selector + the branch's proof (below) |
@@ -1890,7 +1891,7 @@ complete.
   the federation leaf — both legitimate sweeps). This is what makes closure unable to grief a
   depositor whose funds were actually swept.
 * **Branch (b) — duplicate**: an inclusion proof shows `peg_in_utxo_id` is already in the
-  completed-peg-ins tree — fBTC was already minted via another request; this one is redundant.
+  completed-peg-ins trie — fBTC was already minted via another request; this one is redundant.
 
 > **Implementation status.** The implemented `Cancel` action checks `owner_auth` + NFT burn only;
 > the branch gating above is the normative target (part of the unbuilt failure-mode milestone —
@@ -2121,11 +2122,11 @@ The diagram above shows two consecutive Cardano epochs with roster handoff from 
 3. **DKG** (new roster, off-chain) — the incoming roster runs distributed key generation to produce the group key $Y_{51}$, running concurrently with the request window.
 4. **Previous-epoch peg-in completion** — peg-ins from the prior epoch's Treasury Movement complete as Bitcoin confirmations arrive (17–40 hours after epoch start).
 5. **Per-batch pegs cutoffs** — there is no single epoch-wide snapshot: each TM batch `B_i` freezes the requests created at least one stability window (3k/f) before it (see *TM batches and the protocol schedule*).
-6. **Update Y** — the current roster publishes the new roster's group public keys to `treasury.ak`.
+6. **Update-Y** — the current roster publishes the new roster's $Y_{51}$ to `treasury.ak`.
 7. **Build Treasury Movement Tx** — the current roster constructs the Bitcoin transaction that sweeps peg-in UTxOs, fulfils peg-out payments, and moves the treasury to the new Taproot address.
 8. **Threshold signing cascade** — the current roster attempts 51% threshold signing. The federation path opens immediately once 51% setup/signing has finished unsuccessfully. The first mode to succeed wins.
 9. **TM submission deadline** — the last batch opportunity is `final_tm_cutoff`, leaving signing, posting, Bitcoin confirmation, and recovery margin before the boundary (see *TM batches and the protocol schedule*).
-10. **New peg requests** — after the pegs snapshot, new requests accumulate for the next epoch's batch.
+10. **New peg requests** — after a batch snapshot, new requests accumulate for the next batch.
 
 ### Realistic epoch timeline (happy path)
 
@@ -2213,7 +2214,7 @@ The phases above, told once as a single end-to-end flow. Actors: the **current r
 the treasury), the **candidates** (registered SPOs for the next epoch), **watchtowers** (relay).
 
 1. **Continuous: registration.** SPOs register (and voluntarily deregister) at
-   `spos_registry.ak` — a one-time cold-key ceremony per pool (see §SPO Registration). Requests
+   `spos-registry.ak` — a one-time cold-key ceremony per pool (see §SPO Registration). Requests
    land at any time; all effects are snapshot-based (snapshot semantics, §SPO Registration).
 2. **Epoch boundary — snapshots.** The candidate set is frozen: the registration linked-list minus
    the active ban list, with the stake distribution read from the previous epoch. The `min_stake`
@@ -2264,13 +2265,13 @@ the treasury), the **candidates** (registered SPOs for the next epoch), **watcht
 
 **Asymmetry between Bitcoin and Cardano finality.** Bitcoin PoW and Cardano Ouroboros Praos [6] both provide probabilistic finality, but Bifrost treats them asymmetrically. Binocular requires ~100 Bitcoin blocks (~17 h) before promoting a TM to `confirmed`, a depth at which Bitcoin reorgs are negligible for practical purposes. Cardano's common-prefix parameter $k = 2160$ is deliberately shallow (~12 h of expected block time) and reorgs shorter than $k$ are routine. The roster therefore has to be careful about what Cardano state it freezes into a Bitcoin-signed TM: a Cardano rollback *after* TM signing is a normal protocol event, whereas a Bitcoin reorg past Binocular confirmation is not.
 
-**Why PegOuts need finality.** A PegOut lock is a Cardano-native action — fBTC is locked at `peg_out.ak` when the PegOut UTxO is created, and the TM pays treasury BTC to match. If the PegOut UTxO rolls back on Cardano *after* the TM is signed, the fBTC lock disappears from the canonical Cardano chain while the TM on Bitcoin still pays out. The withdrawer keeps their fBTC **and** collects BTC — a net loss to the treasury. Once signed and broadcast, a TM cannot un-pay a PegOut. Every PegOut must therefore be past any possible Cardano reorg before it enters the Pegs Snapshot.
+**Why PegOuts need finality.** A PegOut lock is a Cardano-native action — fBTC is locked at `peg-out.ak` when the PegOut UTxO is created, and the TM pays treasury BTC to match. If the PegOut UTxO rolls back on Cardano *after* the TM is signed, the fBTC lock disappears from the canonical Cardano chain while the TM on Bitcoin still pays out. The withdrawer keeps their fBTC **and** collects BTC — a net loss to the treasury. Once signed and broadcast, a TM cannot un-pay a PegOut. Every PegOut must therefore be past any possible Cardano reorg before it enters a batch snapshot.
 
 **Why PegInRequests do not.** A PegInRequest is a Cardano-side *registration* of a Bitcoin deposit that already exists on Bitcoin and is already Binocular-confirmed. Three properties make its rollback recoverable:
 
 - **Permissionless creation.** Anyone can create a PegInRequest with a valid Binocular inclusion proof; the proof's validity depends only on Bitcoin state.
 - **BTC-side-bound mint authorization.** The depositor's fBTC-mint BIP-322 signature commits to `"BFR-mint-v1" ‖ btc_txid ‖ peg_in_utxo_id ‖ chosen_cardano_address`, so it is bound to the Bitcoin UTxO, not to the specific Cardano PegInRequest NFT. The same signature verifies against any re-created PegInRequest for the same deposit.
-- **BTC-side-bound double-mint protection.** The completed-peg-ins MPT (its own singleton UTxO) is keyed by `peg_in_utxo_id`, not by the NFT.
+- **BTC-side-bound double-mint protection.** The completed-peg-ins trie (its own singleton UTxO) is keyed by `peg_in_utxo_id`, not by the NFT.
 
 If a PegInRequest rolls back after the TM is broadcast, the BTC sweep still succeeds on Bitcoin, and any watchtower (or the depositor) can re-create the PegInRequest; the depositor then claims fBTC with the original Schnorr signature. **Net impact: a delayed fBTC mint, never a fund loss.** Strict pre-snapshot finality is therefore *not required* for PegInRequests — only for PegOuts. In practice the protocol treats both uniformly at the same snapshot boundary for operational simplicity and for SPO determinism under restart/partition scenarios, not for fund-safety reasons.
 
@@ -2295,8 +2296,8 @@ We describe each in detail.
 Before the first SPO registration, the protocol bootstrap creates the SPO-related on-chain state in production:
 
 1. The treasury bootstrap policy mints the **Treasury state NFT** and creates the Treasury state UTxO at `treasury.ak`, with the initial treasury parameters and an empty `bifrost_identity_root`.
-2. The `spos_registry.ak` minting policy has a one-shot bootstrap branch that consumes a fixed bootstrap nonce UTxO, mints the **registration-list root NFT** (`reg-root`), and creates the empty registration-list root UTxO at `spos_registry.ak`.
-3. The `spo_bans.ak` policy has a one-shot bootstrap branch that consumes a fixed bootstrap nonce UTxO, mints the **ban-list root NFT** (`ban-root`), and creates the empty ban-list root UTxO at `spo_bans.ak`.
+2. The `spos-registry.ak` minting policy has a one-shot bootstrap branch that consumes a fixed bootstrap nonce UTxO, mints the **registration-list root NFT** (`reg-root`), and creates the empty registration-list root UTxO at `spos-registry.ak`.
+3. The `spo-bans.ak` policy has a one-shot bootstrap branch that consumes a fixed bootstrap nonce UTxO, mints the **ban-list root NFT** (`ban-root`), and creates the empty ban-list root UTxO at `spo-bans.ak`.
 
 These three authenticated UTxOs are the starting point for all later SPO-related transactions. The runtime protocol never creates replacement roots. Instead:
 
@@ -2312,7 +2313,7 @@ When the registration or ban list is otherwise empty, its bootstrap-created root
 
 Before participating in Bifrost, each SPO must complete a **one-time registration** that binds their Cardano pool identity to a long-term Bifrost identity key. This registration uses the SPO's cold key exactly once, after which all protocol operations use the Bifrost identity key. This design keeps cold keys offline except for initial registration and revocation.
 
-Concretely, an SPO registers by submitting a Cardano `register_spo` transaction to `spos_registry.ak`. The transaction consumes the current registration-list anchor UTxO and the Treasury state UTxO, mints exactly one Bifrost Membership Token named by `pool_id`, and creates a registration-node UTxO whose value is that membership token plus min ADA and whose datum contains `bifrost_id_pk`, `bifrost_url`, and the ordered linked-list pointers. The redeemer carries `cold_vkey`, `cold_sig`, `bifrost_sig`, `registration_anchor_output_index`, and the non-membership witness proving that `bifrost_id_pk` is not already present in the Treasury state's `bifrost_identity_root`. The SPO program CLI is the intended operator interface for building this transaction; the protocol-level transaction shape is specified in Section 5 below.
+Concretely, an SPO registers by submitting a Cardano `register_spo` transaction to `spos-registry.ak`. The transaction consumes the current registration-list anchor UTxO and the Treasury state UTxO, mints exactly one Bifrost Membership Token named by `pool_id`, and creates a registration-node UTxO whose value is that membership token plus min ADA and whose datum contains `bifrost_id_pk`, `bifrost_url`, and the ordered linked-list pointers. The redeemer carries `cold_vkey`, `cold_sig`, `bifrost_sig`, `registration_anchor_output_index`, and the non-membership witness proving that `bifrost_id_pk` is not already present in the Treasury state's `bifrost_identity_root`. The SPO program CLI is the intended operator interface for building this transaction; the protocol-level transaction shape is specified in Section 5 below.
 
 <!-- G12, ratified 2026-07-15: requests continuous, effects snapshot-based. -->
 **Snapshot semantics (normative).** Registration and revocation transactions may land **at any
@@ -2348,7 +2349,7 @@ survive the gap).
 
 ##### 3.1 Bifrost Membership Token
 
-- **Minting Policy**: `spos_registry.ak`
+- **Minting Policy**: `spos-registry.ak`
 - **TokenName**: `pool_id`
 - Exactly **one token per SPO** (enforced by minting policy).
 - The token serves as the on-chain badge of Bifrost participation.
@@ -2359,7 +2360,7 @@ survive the gap).
 All registered SPOs are tracked using an **on-chain ordered linked-list**. Each node in the list represents a registered SPO and is stored as an individual UTxO at the registry script address. The list is ordered by `pool_id`, ensuring uniqueness and enabling efficient insertion and removal.
 
 - **Node Value**: Bifrost Membership Token + the minimum ADA required to hold the token and datum.
-- **Element key**: the ordering key is **not stored in the datum** — it is the **asset name of the registry-policy NFT** held in the UTxO. The list root carries the constant asset name `reg-root`; each registration node carries its `pool_id` (`blake2b_224(cold_vkey)`) as the asset name. The key is therefore minted under, and authenticated by, the `spos_registry.ak` policy: immutable across spends, unique, and indexable.
+- **Element key**: the ordering key is **not stored in the datum** — it is the **asset name of the registry-policy NFT** held in the UTxO. The list root carries the constant asset name `reg-root`; each registration node carries its `pool_id` (`blake2b_224(cold_vkey)`) as the asset name. The key is therefore minted under, and authenticated by, the `spos-registry.ak` policy: immutable across spends, unique, and indexable.
 - **Element Datum** (`aiken_design_patterns/linked_list` `Element`):
 ```text
 Element     = Constr(0, [ ElementData, Link ])
@@ -2386,7 +2387,7 @@ The on-chain linked-list implementation uses the `aiken_design_patterns/linked_l
 
 ##### 3.3 Bifrost Identity Root In Treasury State
 
-Active Bifrost identity bindings are tracked in the Treasury state UTxO at `treasury.ak`. The Treasury state stores a Merkle Patricia Trie root over the map:
+Active Bifrost identity bindings are tracked in the Treasury state UTxO at `treasury.ak`. The Treasury state stores an MPF root over the map:
 
 `bifrost_id_pk -> pool_id`
 
@@ -2403,10 +2404,10 @@ This preserves `pool_id` as the canonical on-chain membership identity while ens
 
 ##### 3.4 Ban Linked-List
 
-Temporary and permanent bans are tracked in a **separate on-chain ordered linked-list** at `spo_bans.ak`. A ban entry does not replace or burn the Bifrost Membership Token; instead, off-chain roster derivation subtracts the active ban list from the registration list.
+Temporary and permanent bans are tracked in a **separate on-chain ordered linked-list** at `spo-bans.ak`. A ban entry does not replace or burn the Bifrost Membership Token; instead, off-chain roster derivation subtracts the active ban list from the registration list.
 
 - **Node Value**: ban node auth token `ban/ || pool_id` + the minimum ADA required to hold the token and datum.
-- **Element key**: as in the registration list (§3.2), the ordering key is **not stored in the datum** — it is the **asset name of the ban-policy NFT** held in the UTxO. The list root carries the asset name `ban-root`; each ban node carries `ban/ || pool_id`. Keys are authenticated by the `spo_bans.ak` policy.
+- **Element key**: as in the registration list (§3.2), the ordering key is **not stored in the datum** — it is the **asset name of the ban-policy NFT** held in the UTxO. The list root carries the asset name `ban-root`; each ban node carries `ban/ || pool_id`. Keys are authenticated by the `spo-bans.ak` policy.
 - **Element Datum** (`aiken_design_patterns/linked_list` `Element`):
 ```text
 Element     = Constr(0, [ ElementData, Link ])
@@ -2422,7 +2423,7 @@ where `BanNodeData` is `{ ban_counter :: Int, ban_until_time :: Int (POSIX ms), 
 - A ban is considered **active** at POSIX time `T` iff `permanent == True` or `ban_until_time > T`.
 - Expired temporary ban entries may remain on-chain; off-chain roster derivation must ignore them once `permanent == False` and `ban_until_time <= T`.
 - `ban_counter` is monotonically increasing for each `pool_id` and determines the exponential timeout duration.
-- `evidence_hashes` records the already-punished fault evidence hashes for the pool. `spo_bans.ak` rejects repeated punishment for the same evidence hash.
+- `evidence_hashes` records the already-punished fault evidence hashes for the pool. `spo-bans.ak` rejects repeated punishment for the same evidence hash.
 
 #### 4. Registration Message and Signatures
 
@@ -2450,11 +2451,11 @@ The registration transaction therefore carries:
 
 A **registration tx** performs the following:
 
-1. **Redeemer**: contains `cold_vkey`, `cold_sig`, `bifrost_sig`, `registration_anchor_output_index`, and the Merkle Patricia Trie witness needed to prove that `bifrost_id_pk` is currently absent from the Treasury state identity map.
+1. **Redeemer**: contains `cold_vkey`, `cold_sig`, `bifrost_sig`, `registration_anchor_output_index`, and the MPF non-membership witness needed to prove that `bifrost_id_pk` is currently absent from the Treasury state identity map.
 2. **Inputs**:
    - Anchor element UTxO from the registration linked-list (either the root UTxO or an existing registration node, depending on where the new node is inserted).
    - Treasury state UTxO from `treasury.ak`, carrying the current `bifrost_identity_root`.
-3. **Mint**: exactly one Bifrost Membership Token with `TokenName = pool_id` under `spos_registry.ak`.
+3. **Mint**: exactly one Bifrost Membership Token with `TokenName = pool_id` under `spos-registry.ak`.
 4. **Outputs**:
    - New registration linked-list node UTxO at registry script address with:
      - Bifrost Membership Token + the minimum ADA required to hold the token and datum
@@ -2468,7 +2469,7 @@ A **registration tx** performs the following:
 Transaction: register_spo
 
 Inputs:
-- registration anchor input at `spos_registry.ak`
+- registration anchor input at `spos-registry.ak`
 - treasury state input at `treasury.ak`
 
 Reference Inputs:
@@ -2478,15 +2479,15 @@ Withdrawals:
 - none
 
 Mint:
-- under `spos_registry.ak`:
+- under `spos-registry.ak`:
   - `pool_id` => +1
 
 Burn:
 - none
 
 Outputs:
-- continued registration anchor output at `spos_registry.ak`
-- new registration node output at `spos_registry.ak`
+- continued registration anchor output at `spos-registry.ak`
+- new registration node output at `spos-registry.ak`
   value:
   - membership token `pool_id`
   - min ADA
@@ -2541,7 +2542,7 @@ Where:
 1. **Redeemer**: contains `cold_vkey`, `cold_sig`, `removed_node_input_index`, and `anchor_node_input_index`.
 2. **Validity interval**: unconstrained (snapshot semantics — see §1).
 3. Spends the registration node and the Treasury state UTxO.
-4. Burns the Bifrost Membership Token under `spos_registry.ak` and returns the registration node's ADA to an SPO-controlled output.
+4. Burns the Bifrost Membership Token under `spos-registry.ak` and returns the registration node's ADA to an SPO-controlled output.
 5. Removes the registration node from the registration linked-list by updating the anchor node's `next` pointer to skip the removed node.
 6. Updates the Treasury state UTxO by removing the matching `bifrost_id_pk -> pool_id` mapping from the identity trie.
 
@@ -2551,8 +2552,8 @@ Where:
 Transaction: deregister_spo
 
 Inputs:
-- registration node input at `spos_registry.ak`
-- registration anchor input at `spos_registry.ak`
+- registration node input at `spos-registry.ak`
+- registration anchor input at `spos-registry.ak`
 - treasury state input at `treasury.ak`
 
 Reference Inputs:
@@ -2565,11 +2566,11 @@ Mint:
 - none
 
 Burn:
-- under `spos_registry.ak`:
+- under `spos-registry.ak`:
   - `pool_id` => -1
 
 Outputs:
-- continued registration anchor output at `spos_registry.ak`
+- continued registration anchor output at `spos-registry.ak`
 - continued treasury state output at `treasury.ak`
   datum:
   - same treasury fields
@@ -2620,7 +2621,7 @@ The consensus-critical token name is:
 blake2b_256(pool_id || evidence_hash)
 ```
 
-`evidence_hash` is the unique public input or evidence commitment for the fault. Datum attached to a fault UTxO may be used as metadata for off-chain indexing, but `spo_bans.ak` does not trust it for consensus. Instead, the ban redeemer carries `accused_pool_id` and `evidence_hash`; `spo_bans.ak` recomputes the token name and checks that exactly one authorized fault policy has minted and burned that token.
+`evidence_hash` is the unique public input or evidence commitment for the fault. Datum attached to a fault UTxO may be used as metadata for off-chain indexing, but `spo-bans.ak` does not trust it for consensus. Instead, the ban redeemer carries `accused_pool_id` and `evidence_hash`; `spo-bans.ak` recomputes the token name and checks that exactly one authorized fault policy has minted and burned that token.
 
 **Ban transaction format**: the ban transaction is permissionless and:
 1. Spends a `FaultProof` token UTxO under one of the authorized fault policies.
@@ -2642,7 +2643,7 @@ Inputs:
 - ban-list anchor input
 
 Reference Inputs:
-- accused registration node at `spos_registry.ak`
+- accused registration node at `spos-registry.ak`
 
 Withdrawals:
 - coordinating ban withdrawal carrying:
@@ -2690,7 +2691,7 @@ Inputs:
 - existing ban node input for the accused `pool_id`
 
 Reference Inputs:
-- accused registration node at `spos_registry.ak`
+- accused registration node at `spos-registry.ak`
 
 Withdrawals:
 - coordinating ban withdrawal carrying:
@@ -2737,7 +2738,7 @@ Required validity interval:
 - **Air-gapped signing**: Both registration and revocation messages can be constructed offline and signed on an air-gapped machine.
 - **Sybil resistance**: One membership token per `pool_id` enforced by minting policy.
 - **Unique active Bifrost identities**: the Treasury state's `bifrost_identity_root` prevents two active registrations from sharing the same `bifrost_id_pk`.
-- **Separated fault verification**: authorized fault verifier policies check raw evidence once and mint reusable `FaultProof` tokens; `spo_bans.ak` only applies ban updates.
+- **Separated fault verification**: authorized fault verifier policies check raw evidence once and mint reusable `FaultProof` tokens; `spo-bans.ak` only applies ban updates.
 - **No expiration**: Membership tokens remain valid indefinitely until explicitly revoked.
 
 
@@ -2786,9 +2787,9 @@ This is separate from the on-chain registration linked-list ordering. The linked
 ##### 4.3 Candidate Information
 
 For each candidate $P_i$, the following information is retrieved:
-- `pool_id` — from Membership UTxO.
-- `bifrost_id_pk` — from Membership UTxO datum.
-- `bifrost_url` — from Membership UTxO datum.
+- `pool_id` — from the registration node UTxO.
+- `bifrost_id_pk` — from the registration node UTxO datum.
+- `bifrost_url` — from the registration node UTxO datum.
 - `delegated_stake` — queried from Cardano ledger state.
 - `ban_until_time` and `permanent` — from the ban linked-list, if a matching ban entry exists.
 
@@ -2986,7 +2987,7 @@ The `FaultProof` token name is:
 blake2b_256(pool_id || evidence_hash)
 ```
 
-`namespace_hash = blake2b_256(phase || epoch || threshold_or_mode || attempt || txid?)`, where `txid` is omitted for DKG namespaces. `spo_bans.ak` does not trust the metadata datum; it authenticates the fault by checking the token name and the fault verifier policy id against its allow-list.
+`namespace_hash = blake2b_256(phase || epoch || threshold_or_mode || attempt || txid?)`, where `txid` is omitted for DKG namespaces. `spo-bans.ak` does not trust the metadata datum; it authenticates the fault by checking the token name and the fault verifier policy id against its allow-list.
 
 **Prototype transaction skeleton**:
 
@@ -3115,7 +3116,7 @@ Direct cryptographic faults remain punishable:
 
 1. An invalid or equivocated Round 1/2 payload is proven at the appropriate authorized fault verifier policy.
 2. The verifier policy mints a `FaultProof` token named `blake2b_256(pool_id || evidence_hash)`.
-3. `spo_bans.ak` may then ban the accused SPO via the time-based ban list.
+3. `spo-bans.ak` may then ban the accused SPO via the time-based ban list.
 
 Non-participation alone does not mint a `FaultProof` token and does not create a separate restart loop.
 
@@ -3365,7 +3366,7 @@ Where:
 
 Entries are concatenated in input-index order. JSON is for transport; the signature covers `SHA256(canonical_bytes)`.
 
-### Threshold failover
+### Signing cascade
 
 There is no separate timeout for the transition `51 -> federation`. Instead, each DKG and signing round has its own bounded submission deadline, and a lower-threshold mode becomes eligible immediately once the higher mode's bounded setup/signing phases finish unsuccessfully.
 
@@ -3415,7 +3416,7 @@ is enforced downstream (see *Leader reward*). This replaces the earlier design i
 `TreasuryMovementValidator` verified roster membership and leader eligibility on-chain — checks that
 depended on an off-chain quantity (`signing_complete_slot`) no Cardano validator can observe.
 
-**Leader reward (mints only).** *Implementation status: normative, not yet implemented — the implemented TM datum's `creator` field is the poster identity this design would pay; the `leader_reward` pin and the mint-side enforcement are pending.* When a depositor mints fBTC (spending a PegInRequest UTxO and referencing the Confirmed TM record), `bridged_asset.ak` enforces one output paying the record's pinned `leader_reward` to its `poster` identity — distributing the posting cost across the mints that benefit from the TM and incentivizing timely submission. **Burns pay nothing**: the peg-out side already contributes through the datum-pinned `per_pegout_fee` (deducted from the BTC payout), so a burn-side reward would double-charge withdrawers — the model is *each side pays exactly once, through the channel where it receives value* — and taxing completion (a cleanup we want to happen) would discourage it. The Update-Y submitter is likewise uncompensated: one transaction per epoch, in the roster's own interest, permissionless.
+**Leader reward (mints only).** *Implementation status: normative, not yet implemented — the implemented TM datum's `creator` field is the poster identity this design would pay; the `leader_reward` pin and the mint-side enforcement are pending.* When a depositor mints fBTC (spending a PegInRequest UTxO and referencing the Confirmed TM record), `bridged-token.ak` enforces one output paying the record's pinned `leader_reward` to its `poster` identity — distributing the posting cost across the mints that benefit from the TM and incentivizing timely submission. **Burns pay nothing**: the peg-out side already contributes through the datum-pinned `per_pegout_fee` (deducted from the BTC payout), so a burn-side reward would double-charge withdrawers — the model is *each side pays exactly once, through the channel where it receives value* — and taxing completion (a cleanup we want to happen) would discourage it. The Update-Y submitter is likewise uncompensated: one transaction per epoch, in the roster's own interest, permissionless.
 
 **Example.** A roster of 5 SPOs (sorted by pool_id: $A, B, C, D, E$). The previous TM's Bitcoin txid hashes to leader index 3, so $D$ is the primary submitter. With $T = 60$ slots and signing completing at slot 1000:
 
@@ -3499,7 +3500,7 @@ Failures are handled deterministically so that all honest SPOs converge on the s
 
 **Direct faults**:
 - If an SPO publishes a payload with a valid transport signature but invalid cryptographic contents, or publishes two distinct signed payloads for the same namespace, any eligible SPO may submit direct fault evidence to the appropriate authorized fault verifier policy.
-- Once the resulting `FaultProof` token is consumed by `spo_bans.ak` and the ban is confirmed, future protocol runs exclude that SPO via the updated active ban list.
+- Once the resulting `FaultProof` token is consumed by `spo-bans.ak` and the ban is confirmed, future protocol runs exclude that SPO via the updated active ban list.
 
 **Deterministic subset selection**:
 - For DKG, the eligible set comes from `registration_list \ active_ban_list` at the relevant roster snapshot time.
@@ -3539,11 +3540,11 @@ Beyond maintaining general Bitcoin state, watchtowers perform specialized duties
 
 * Monitor the Bitcoin network for peg-in transactions by scanning for OP_RETURN outputs with the `"BFR"` prefix.
 * Each peg-in transaction sends BTC to a unique Taproot address ($Y_{51}$ key path for SPO sweep, $Y_{federation}$ script leaf for federation emergency sweep, or a depositor timeout script leaf for self-refund; see **Taproot address construction**) and includes the OP_RETURN beacon `"BFR" ‖ D ‖ Q_auth` (67 bytes): `D` lets SPOs reconstruct the refund leaf and the key-path sweep tweak; `Q_auth` is the BIP-322 completion key. Because each peg-in goes to a unique Taproot address (derived from the depositor's refund key), watchtowers cannot track peg-ins by address alone — the beacon is what makes them identifiable.
-* Once a peg-in transaction reaches the required confirmation threshold (100 Bitcoin blocks plus 200 minutes of Binocular challenge period), watchtowers create a PegInRequest UTxO on Cardano (peg_in.ak) by:
+* Once a peg-in transaction reaches the required confirmation threshold (100 Bitcoin blocks plus 200 minutes of Binocular challenge period), watchtowers create a PegInRequest UTxO on Cardano (peg-in.ak) by:
   * Minting a PegInRequest NFT.
   * Providing a transaction inclusion proof consisting of: the raw Bitcoin transaction data, a Merkle proof linking the transaction to the block's Merkle root, and an inclusion proof of the confirmed block in the Binocular Oracle.
   * Setting the datum with: the creator's `owner_auth` (for PegInRequest closure authorization), the raw Bitcoin peg-in transaction bytes, and the deposit-binding fields — the deposit outpoint, amount, depositor key, and the current treasury outpoint (the full `PegInDatum`, see the Transaction catalog).
-* The on-chain `peg_in.ak` validator verifies the Binocular inclusion proof and confirmation depth (100 Bitcoin blocks + challenge period) but does not parse the Bitcoin transaction. SPO programs parse the raw transaction off-chain to extract deposit data (txid, vout, amount, the beacon keys, Taproot output key $Q$) and validate it before including the peg-in in the Treasury Movement transaction. The raw peg-in transaction is parsed on-chain only at mint time to bind the beacon keys, outpoint, and amount (`deposit_binding_ok`). Taproot address correctness is **not** verified on-chain (Plutus V3 lacks secp256k1 point arithmetic builtins); instead, SPOs verify off-chain (see **Taproot address verification**).
+* The on-chain `peg-in.ak` validator verifies the Binocular inclusion proof and confirmation depth (100 Bitcoin blocks + challenge period) but does not parse the Bitcoin transaction. SPO programs parse the raw transaction off-chain to extract deposit data (txid, vout, amount, the beacon keys, Taproot output key $Q$) and validate it before including the peg-in in the Treasury Movement transaction. The raw peg-in transaction is parsed on-chain only at mint time to bind the beacon keys, outpoint, and amount (`deposit_binding_ok`). Taproot address correctness is **not** verified on-chain (Plutus V3 lacks secp256k1 point arithmetic builtins); instead, SPOs verify off-chain (see **Taproot address verification**).
 
 **Treasury Movement Relay**
 
@@ -3555,8 +3556,8 @@ Beyond maintaining general Bitcoin state, watchtowers perform specialized duties
 **Peg-out Completion**
 
 * Peg-out completion (burning the locked fBTC) is performed by the withdrawer — it must satisfy the PegOut datum's `owner_auth`. Watchtowers' role in a peg-out ends at relaying the signed TM; the withdrawer is paid on Bitcoin as soon as the TM confirms, with no Cardano-side completion required for the payout.
-* At completion the withdrawer provides the raw TM transaction with a Binocular inclusion proof that it is confirmed and a non-membership proof against the completed-peg-outs tree; the validator verifies the TM spends the treasury outpoint named in the PegOut datum and paid the destination, burns the locked fBTC, and returns the MIN_ADA.
-* Peg-in completion (minting fBTC) is performed by the depositor directly, not by watchtowers — the depositor must provide their Bitcoin x-only public key and a Schnorr signature to authorize minting to their chosen Cardano address (see **bridged_asset.ak**).
+* At completion the withdrawer provides the raw TM transaction with a Binocular inclusion proof that it is confirmed and a non-membership proof against the completed-peg-outs trie; the validator verifies the TM spends the treasury outpoint named in the PegOut datum and paid the destination, burns the locked fBTC, and returns the MIN_ADA.
+* Peg-in completion (minting fBTC) is performed by the depositor directly, not by watchtowers — the depositor must provide their Bitcoin x-only public key and a Schnorr signature to authorize minting to their chosen Cardano address (see **bridged-token.ak**).
 
 **Anomaly Detection**
 
@@ -3587,7 +3588,7 @@ Blocks progress through multiple stages:
 * Only blocks with 100+ confirmations are considered for finality
 
 **Transaction Inclusion Proofs**
-For Bifrost operations, the Oracle provides data for Watchtowers to construct proofs that:
+For Bifrost operations, the Oracle provides data for watchtowers to construct proofs that:
 
 * Prove a specific transaction exists within a confirmed block
 * Prove the block is part of the confirmed chain
@@ -3633,10 +3634,10 @@ Bifrost's watchtower design relies on a minimal trust assumption: only one hones
 | `leader_reward` | Operational params #4 | updatable | pinned into TM records at post; mint-side enforcement |
 | schedule (`dkg_r1/r2_deadline`, `update_y_deadline`, `tm_batch_interval`, `sign_r1/r2_window`, `leader_slot_T`, `tm_recovery_window`, `final_tm_cutoff`, `stability_window`) | Operational params #5… | derived / constrained / free (see the schedule table; effect: next epoch) | every SPO's scheduler |
 | `per_pegout_fee` (effective) | each `PegOutDatum` | pinned at lock time | TM builder; completion + cancel verifiers |
-| `leader_reward` (effective) | each TM record datum | pinned at post time | `bridged_asset.ak` mint check |
+| `leader_reward` (effective) | each TM record datum | pinned at post time | `bridged-token.ak` mint check |
 | `y_federation`, `federation_csv_blocks` | Treasury state datum #2–3 | per-instance constants (rotatable via the Update-Y federation variant) | address derivation; CSV leaves; federation reset |
 | `refund_timeout` | baked into each deposit's refund leaf | per-instance constant, `> federation_csv_blocks` | depositors; SPO address reconstruction |
-| ban parameters (`base_ban_duration_ms`, `max_faults_before_permanent`, `max_validity_window_ms`) | compile-time parameters of `spo_bans.ak` | per-instance constants | ban validator |
+| ban parameters (`base_ban_duration_ms`, `max_faults_before_permanent`, `max_validity_window_ms`) | compile-time parameters of `spo-bans.ak` | per-instance constants | ban validator |
 | protocol constants (Bitcoin dust 330 sat; Binocular depth 100 blocks + challenge; `security_threshold` 51%) | this specification / Binocular [1] | fixed | various |
 
 ## References

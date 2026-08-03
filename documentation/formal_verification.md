@@ -211,7 +211,7 @@ theorem pegout_liveness :
 | A1 | Treasury spending requires FROST threshold signature or federation after timeout | Axiom: Taproot spending rules, FROST unforgeability |
 | A2 | fBTC minting requires consuming a proven PegInRequest | Axiom: `btc-mint` validator checks peg-in withdraw |
 | A3 | Peg-out cancel requires withdrawer's signature | Axiom: validator checks `extra_signatories` |
-| A4 | Peg-in completion requires depositor's Bitcoin Schnorr signature | Axiom: `bridged_asset.ak` checks Schnorr sig |
+| A4 | Peg-in completion requires depositor's Bitcoin Schnorr signature | Axiom: `bridged-token.ak` checks Schnorr sig |
 | A5 | SPO registration requires cold key Ed25519 signature | Axiom: minting policy verifies signature |
 | A6 | Config updates require admin credential | Axiom: config spend validator checks admin |
 

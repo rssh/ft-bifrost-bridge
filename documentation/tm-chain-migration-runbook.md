@@ -23,7 +23,7 @@ bridge config, so `bridge.config-nft-{policy-id,asset-name}` must already be set
 
 ## 2. Compute the new peg-in hash and register its reward account
 
-The TM NFT policy is `peg_in.ak`'s 4th parameter, so the peg-in script hash changes.
+The TM NFT policy is `peg-in.ak`'s 4th parameter, so the peg-in script hash changes.
 `binocular deploy-bridge --dry-run` prints the full derived hash chain, including
 `peg_in withdraw hash`, without submitting. Register the new peg-in withdraw reward
 account (deposit-less RegCert) before completions run, e.g. via `register-bridge-creds`.

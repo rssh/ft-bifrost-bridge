@@ -1330,13 +1330,14 @@ where the script tree has two leaves:
 
 Key path ($Y_{51}$) is the main line: it is how SPOs sweep this UTxO into the next Treasury Movement.
 
-**What Bitcoin enforces**: standard tx validity (input signatures, fees, output scripts well-formed). Nothing Bifrost-specific.
+**Checks enforced on-chain** (Bitcoin consensus): standard tx validity (input signatures, fees, output scripts well-formed). Nothing Bifrost-specific.
 
-**What the depositor must get right** (no party will save them otherwise)
+**Checks delegated off-chain** (the depositor — no party will save them otherwise)
 
-* $Q$ is constructed from the **current** $Y_{51}$ published in `treasury.ak` and $Y_{federation}$. Using a stale $Y_{51}$ makes the peg-in unsweepable — the depositor must then wait out the ~30-day refund.
-* The OP_RETURN beacon must be present and equal `BFR ‖ D ‖ Q_auth`, otherwise watchtowers will not detect the deposit and no PegInRequest will ever be created.
-* `D` must be the key whose refund leaf is committed in the address (else the refund path is unspendable), and `Q_auth` must be a key the depositor can BIP-322-sign with (else completion is impossible).
+* The depositor MUST construct $Q$ from the **current** $Y_{51}$ published in `treasury.ak` and $Y_{federation}$. Using a stale $Y_{51}$ makes the peg-in unsweepable — the depositor must then wait out the ~30-day refund.
+* The depositor MUST include the OP_RETURN beacon, equal to `BFR ‖ D ‖ Q_auth` — otherwise watchtowers will not detect the deposit and no PegInRequest will ever be created.
+* `D` MUST be the key whose refund leaf is committed in the address — else the refund path is unspendable.
+* `Q_auth` MUST be a key the depositor can BIP-322-sign with — else completion is impossible.
 
 > **Implementation status.** The deployed demo beacon is `"BFR" ‖ Q_auth` (35 bytes) — `D` is conveyed to the sweeping operator out-of-band, acceptable for a federation-run demo but not for permissionless SPO sweeping. The 67-byte dual-key beacon above is the normative target (tooling + `deposit_binding_ok` CR).
 
@@ -1370,23 +1371,25 @@ flowchart LR
 | **Validity interval** | unconstrained |
 | **Size (est.)** | ~2 KB for N=1; up to ~16 KB for N=10 (batch ceiling). See **Size estimation and batch ceiling** below. |
 
-**Checks enforced on-chain** (per minted NFT, independently)
+**Checks enforced on-chain** (`peg-in.ak` mint policy — per minted NFT, independently)
 
-* The supplied BTC tx is Merkle-included in the supplied BTC block header.
-* That block header is included in Binocular's confirmed-chain root.
-* **Deposit binding** (`deposit_binding_ok`): the datum's `peg_in_utxo_id` is an output of the
-  supplied deposit tx; that output is a P2TR paying exactly `peg_in_amount`; and
-  `user_source_chain_pub_key` matches the key committed in the deposit's beacon output. This is
-  what pins the datum's claim fields to the real Bitcoin deposit.
-* The NFT is minted uniquely and paired with exactly one output carrying the declared datum.
+* **[CPR-1]** `peg-in.ak` MUST verify the supplied BTC tx is Merkle-included in the supplied BTC block header.
+* **[CPR-2]** `peg-in.ak` MUST verify that block header is included in Binocular's confirmed-chain root.
+* **[CPR-3]** **Deposit binding** (`deposit_binding_ok`) — `peg-in.ak` MUST verify all of:
+  1. the datum's `peg_in_utxo_id` is an output of the supplied deposit tx;
+  2. that output is a P2TR paying exactly `peg_in_amount`;
+  3. `user_source_chain_pub_key` matches the key committed in the deposit's beacon output.
 
-**Checks delegated to SPOs off-chain** (Plutus V3 cannot do secp256k1 point arithmetic, so these are verified before signing the TM)
+  This is what pins the datum's claim fields to the real Bitcoin deposit.
+* **[CPR-4]** `peg-in.ak` MUST verify the NFT is minted uniquely and paired with exactly one output carrying the declared datum.
 
-* The BTC output pays a valid Bifrost peg-in Taproot address (reconstructed from $Y_{51}$, $Y_{federation}$, and the depositor's refund key `D` from the beacon).
-* The OP_RETURN beacon equals `BFR ‖ D ‖ Q_auth`.
-* The claimed peg-in amount matches the BTC output amount.
+**Checks delegated off-chain** (each SPO, before signing the TM — Plutus V3 cannot do secp256k1 point arithmetic)
 
-If any off-chain check fails, SPOs skip this PegInRequest. No fund risk, no theft risk — griefing cost = NFT minting fee + MIN_ADA.
+* Each SPO MUST verify the BTC output pays a valid Bifrost peg-in Taproot address (reconstructed from $Y_{51}$, $Y_{federation}$, and the depositor's refund key `D` from the beacon).
+* Each SPO MUST verify the OP_RETURN beacon equals `BFR ‖ D ‖ Q_auth`.
+* Each SPO MUST verify the claimed peg-in amount matches the BTC output amount.
+
+If any off-chain check fails, the SPO MUST skip this PegInRequest. No fund risk, no theft risk — griefing cost = NFT minting fee + MIN_ADA.
 
 **PegInDatum** <!-- G9: field list matches the implemented bifrost/types/peg-in.ak (constructor
 order is normative); the previous 2-field table disagreed with the fields §Complete peg-in reads. -->
@@ -1474,7 +1477,7 @@ flowchart LR
   **deterministic skip rule** at TM construction and by the completion/cancel verifiers at spend
   time.
 
-**Client-side checks (normative for wallets and request-building tooling)**
+**Checks delegated off-chain** (client-side — normative for wallets and request-building tooling)
 
 A request that fails these is skippable at best and unrecoverable at worst, so software building
 this transaction MUST validate before submitting:
@@ -1538,13 +1541,14 @@ flowchart LR
 | **51% main line** | $Y_{51}$ key path | $Y_{51}$ key path | 51% quorum produced a valid aggregate signature |
 | **Federation emergency** | $Y_{federation}$ script leaf + CSV | $Y_{federation}$ script leaf + CSV | 51% mode exhausted |
 
-**What Bitcoin enforces**: standard Taproot verification per the chosen path. Nothing Bifrost-specific.
+**Checks enforced on-chain** (Bitcoin consensus): standard Taproot verification per the chosen path. Nothing Bifrost-specific.
 
-**What SPOs / federation must get right off-chain**
+**Checks delegated off-chain** (SPOs / federation)
 
-* The batch covers exactly the frozen set of PegInRequests and PegOuts for this epoch (determinism — every honest SPO must build the same unsigned tx).
-* Each peg-in input is spendable via a path the signer actually controls.
-* Each PegOut payment matches the destination in its datum and pays that `amount` minus the per-peg-out protocol fee (see *Amounts and fees*).
+* The TM builder MUST include exactly the frozen set of PegInRequests and PegOuts for this batch.
+* Every honest SPO MUST build a byte-identical unsigned TM (determinism).
+* A signer MUST NOT sign a TM with an input it cannot actually spend.
+* Each PegOut payment MUST pay the destination in its datum exactly `amount` minus that peg-out's datum-pinned fee (see *Amounts and fees*).
 
 If the TM is malformed or omits a peg-out, recovery paths on Cardano unwind the state in the next epoch.
 
@@ -1581,21 +1585,20 @@ flowchart LR
 
 **Checks enforced on-chain** (the `TreasuryMovementValidator` mint branch)
 
-* Exactly +1 of the TM NFT is minted — and it is the ONLY asset name touched under the TM policy
-  in this tx — and it is **bound**: the output carrying it sits at the TM script address with an
-  inline `Unconfirmed { signed_btc_tx, creator, created }` datum – without this binding the
-  linkage check would gate nothing.
-* `created` equals the tx's validity upper bound exactly (`created == validRange.to`, finite
+* **[PTM-1]** `TreasuryMovementValidator` MUST verify exactly +1 of the TM NFT is minted.
+* **[PTM-2]** `TreasuryMovementValidator` MUST verify the TM NFT is the ONLY asset name touched under the TM policy in this tx.
+* **[PTM-3]** `TreasuryMovementValidator` MUST verify the output carrying the TM NFT sits at the TM script address with an inline `Unconfirmed { signed_btc_tx, creator, created }` datum — without this binding the linkage check would gate nothing.
+* **[PTM-4]** `TreasuryMovementValidator` MUST verify `created` equals the tx's validity upper bound exactly (`created == validRange.to`, finite
   bound required) — since the tx cannot be included after that bound, `created` upper-bounds the
   real posting time, so the GC grace period cannot be shortcut by backdating (future-dating only
   delays the poster's own reclaim).
-* **TM-chain linkage**: input 0 (the treasury input) of `signed_btc_tx` is
+* **[PTM-5]** **TM-chain linkage** — `TreasuryMovementValidator` MUST verify input 0 (the treasury input) of `signed_btc_tx` is
   - `Genesis(i)`: the **initial treasury outpoint** (`initial_btc_treasury_utxo`, implemented Config field #11, read from the reference input at index `i`, which must carry the config NFT) — the first movement after bridge creation; **or**
   - `Chain(i)`: `(btc_txid, 0)` of the **referenced predecessor `Confirmed TM tx`** record at reference-input index `i` (authenticated by its TM NFT).
 
 **Checks delegated off-chain**
 
-* `signed_btc_tx` is a well-formed Bitcoin tx with valid signatures that sweeps the frozen PegInRequest / PegOut batch. If malformed, it fails to confirm on Bitcoin and Confirm TM tx never fires — a correct resubmission is required. The peg-in and peg-out sets are implicit in `signed_btc_tx` (Confirm TM tx parses them out).
+* The signing cascade MUST produce a `signed_btc_tx` that is a well-formed Bitcoin tx with valid signatures sweeping the frozen PegInRequest / PegOut batch. If malformed, it fails to confirm on Bitcoin and Confirm TM tx never fires — a correct resubmission is required. The peg-in and peg-out sets are implicit in `signed_btc_tx` (Confirm TM tx parses them out).
 
 > **The TM chain — how the treasury pointer works (G15).** There is **no mutable on-chain pointer
 > register**. The Config's initial treasury outpoint anchors a chain: every Confirmed TM record proves (via
@@ -1641,21 +1644,26 @@ flowchart LR
 | **Required signers** | prover (fee spend) — permissionless |
 | **Size (est.)** | ~9 KB at 100+100: redeemer ~1 KB (two proofs at ~500–600 B each); `Confirmed` output datum ~7 KB (100 swept peg-ins + 100 fulfilled peg-outs). **Primary constraint is exec-unit memory** for parsing the raw BTC tx on-chain, not byte size. Fee ≈ 0.7 ADA. |
 
-**Checks enforced on-chain**
+**Checks enforced on-chain** (the `TreasuryMovementValidator` spend branch, `Unconfirmed → Confirmed`)
 
-* `btc_txid == sha256d(strip_witness(Unconfirmed.signed_btc_tx))` — the Bitcoin txid is double-SHA256 over the **witness-stripped** serialization; the stored TM is witness-complete, so the validator strips witnesses before hashing (this is what makes the txid match the one committed in Bitcoin block Merkle trees; cf. the B1 note under *Complete peg-in*).
-* `btc_txid` is Merkle-included in the supplied block header.
-* That block header is in Binocular's confirmed-chain root.
-* `Confirmed` datum fields (`swept_peg_in_utxo_ids`, `fulfilled_peg_outs`) are populated by parsing the inputs and outputs of `Unconfirmed.signed_btc_tx` respectively. The old treasury input and the new treasury output are included in these lists — they are inert, because no PegInRequest can satisfy the depositor Schnorr-sig check against the TM tx's inputs (no `BFR` OP_RETURN), and no PegOut will match the new treasury destination + amount.
-* TM NFT is carried from the Unconfirmed input to the Confirmed output (preserving identity) — the Confirmed record thereby becomes a link of the **TM chain** (see *Post signed TM*): its `btc_txid` is the txid of the current treasury outpoint until the next record extends the chain.
+* **[CTM-1]** `TreasuryMovementValidator` MUST verify `btc_txid == sha256d(strip_witness(Unconfirmed.signed_btc_tx))` — the Bitcoin txid is double-SHA256 over the **witness-stripped** serialization; the stored TM is witness-complete, so the validator strips witnesses before hashing (this is what makes the txid match the one committed in Bitcoin block Merkle trees; cf. the B1 note under *Complete peg-in*).
+* **[CTM-2]** `TreasuryMovementValidator` MUST verify `btc_txid` is Merkle-included in the supplied block header.
+* **[CTM-3]** `TreasuryMovementValidator` MUST verify that block header is in Binocular's confirmed-chain root.
+* **[CTM-4]** `TreasuryMovementValidator` MUST verify the `Confirmed` datum fields (`swept_peg_in_utxo_ids`, `fulfilled_peg_outs`) are populated by parsing the inputs and outputs of `Unconfirmed.signed_btc_tx` respectively. The old treasury input and the new treasury output are included in these lists — they are inert, because no PegInRequest can satisfy the depositor Schnorr-sig check against the TM tx's inputs (no `BFR` OP_RETURN), and no PegOut will match the new treasury destination + amount.
+* **[CTM-5]** `TreasuryMovementValidator` MUST verify the TM NFT is carried from the Unconfirmed input to the Confirmed output (preserving identity) — the Confirmed record thereby becomes a link of the **TM chain** (see *Post signed TM*): its `btc_txid` is the txid of the current treasury outpoint until the next record extends the chain.
 
 <!-- G17ii (records permanent, no GC) superseded 2026-07-20: grace-period GC by the creator. -->
 **Garbage collection (grace-period reclaim).** A `Confirmed` record is spendable by its
-**creator** once its grace period elapses: the spend must burn the TM NFT, carry the creator's
-signature, and have a validity interval entirely after `created + 30 days`. By then every swept
+**creator** once its grace period elapses:
+
+* **[CTM-6]** `TreasuryMovementValidator` MUST verify the GC spend burns the TM NFT.
+* **[CTM-7]** `TreasuryMovementValidator` MUST verify the GC spend carries the creator's signature.
+* **[CTM-8]** `TreasuryMovementValidator` MUST verify the GC spend's validity interval lies entirely after `created + 30 days`.
+
+By then every swept
 peg-in / fulfilled peg-out is expected to be completed, so the record is no longer needed as
 proof material; the creator reclaims the min-ADA. `created` cannot be backdated (it must equal the
-mint tx's validity upper bound), so the grace period is real. **Operational rule**: the creator must NOT GC the chain-TIP
+mint tx's validity upper bound), so the grace period is real. **Operational rule**: the creator MUST NOT GC the chain-TIP
 record — the next TM's `Chain` mint references it (and `Genesis` no longer applies once the
 anchor outpoint is spent). While the bridge is active a successor lands well within the grace
 period; after a >30-day quiet spell, recovery is a config Update re-anchoring
@@ -1694,11 +1702,11 @@ flowchart LR
 | **Required signers** | depositor (fee spend) |
 | **Size (est.)** | ~2.7 KB per mint: redeemer ~1.3 KB (Schnorr sig + pubkey + two MPF proofs at ~600 B each); input datum ~500 B (PegInRequest). Fee ≈ 0.37 ADA. Membership check against `swept_peg_in_utxo_ids` scales with list length (up to 100 entries). |
 
-**Checks enforced on-chain**
+**Checks enforced on-chain** (`bridged-token.ak` mint + `peg-in.ak` spend)
 
-* Referenced `Confirmed TM tx` UTxO carries a legitimate TM NFT.
-* PegInRequest's `peg_in_utxo_id` appears in `Confirmed.swept_peg_in_utxo_ids`.
-* Depositor's **BIP-322** signature is valid over the **per-mint signing message**, verifying under the auth key recorded in the PegInRequest datum (`user_source_chain_pub_key` = the beacon's `Q_auth`). At PegInRequest **mint** time that key — together with `peg_in_utxo_id` and `peg_in_amount` — is bound to the depositor's *actual* deposit (`bitcoin.deposit_binding_ok`). *This is what proves the depositor — not a watchtower — is claiming the fBTC.*
+* **[CPI-1]** `bridged-token.ak` MUST verify the referenced `Confirmed TM tx` UTxO carries a legitimate TM NFT.
+* **[CPI-2]** `bridged-token.ak` MUST verify the PegInRequest's `peg_in_utxo_id` appears in `Confirmed.swept_peg_in_utxo_ids`.
+* **[CPI-3]** `bridged-token.ak` MUST verify the depositor's **BIP-322** signature over the **per-mint signing message**, under the auth key recorded in the PegInRequest datum (`user_source_chain_pub_key` = the beacon's `Q_auth`). At PegInRequest **mint** time that key — together with `peg_in_utxo_id` and `peg_in_amount` — is bound to the depositor's *actual* deposit (`bitcoin.deposit_binding_ok`). *This is what proves the depositor — not a watchtower — is claiming the fBTC.*
 
   The signed message is the ASCII text `BFR-mint-v1:<64-hex>`, where the hex is
 
@@ -1716,11 +1724,11 @@ flowchart LR
   * `"BFR-mint-v1"` — domain-separation tag (BIP340 practice).
   * `peg_in_utxo_id` — binds the signature to **this specific peg-in**. Without it, if a depositor reused the same BTC pubkey across multiple peg-ins in the same TM, publishing the signature to claim one would let an attacker replay it to claim the others.
   * `chosen_cardano_address` — binds the signature to the **destination the depositor chose**. Prevents reorg-based front-running where an attacker replays the signature with their own Cardano address after a short chain reorganisation of the depositor's mint tx.
-* Peg-in is **not yet** in the completed-peg-ins trie (MPF non-membership proof).
-* Peg-in **is** in the new MPF root in the output (prevents double-mint).
-* fBTC minted equals the amount parsed from the raw BTC peg-in tx.
-* One output pays the referenced Confirmed record's pinned `leader_reward` to its `poster` identity (see *Leader reward*).
-* PegInRequest NFT is burned.
+* **[CPI-4]** `bridged-token.ak` MUST verify the peg-in is **not yet** in the completed-peg-ins trie (MPF non-membership proof).
+* **[CPI-5]** `bridged-token.ak` MUST verify the peg-in **is** in the new MPF root in the output (prevents double-mint).
+* **[CPI-6]** `bridged-token.ak` MUST verify the fBTC minted equals the amount parsed from the raw BTC peg-in tx.
+* **[CPI-7]** `bridged-token.ak` MUST verify one output pays the referenced Confirmed record's pinned `leader_reward` to its `poster` identity (see *Leader reward*).
+* **[CPI-8]** `peg-in.ak` MUST verify the PegInRequest NFT is burned.
 
 > **Implementation note — where the TM is verified (B1).**
 > `CompletePegIn` does **not** carry the raw TM tx or any Bitcoin Merkle/inclusion proof. It
@@ -1770,21 +1778,21 @@ flowchart LR
 
 **Checks enforced on-chain** (`peg-out.ak` spend, delegated to its withdraw script)
 
-* The supplied block header is in Binocular's confirmed-chain root, and the TM tx is Merkle-included in that block (txid = `sha256d` of the witness-stripped TM bytes).
-* Completion is authorized per the PegOut datum's `owner_auth`.
-* The TM is *legit and produces the peg-out* — delegated to the `legit_treasury_movement_and_peg_out_produced` verifier (a withdraw script whose hash is read from the Config UTxO). In one forward scan of the raw TM bytes it proves the TM:
-  1. **spends** `source_chain_treasury_utxo_id` — the Bitcoin treasury outpoint named in the PegOut datum; and
-  2. **produces** an output paying `source_chain_destination_address` exactly
-     `amount − datum.per_pegout_fee` satoshis — gross minus **the fee pinned in this PegOut's own
-     datum at lock time** (see *Treasury Movement → Amounts and fees*). Comparing against the
-     datum-pinned fee, never a current on-chain value, is what makes fee updates race-free (§
-     Operational parameters UTxO). The current implementation runs with `per_pegout_fee = 0`, so
-     the check is exact equality — forward-compatible.
-
-  `peg-out.ak` cross-checks the verifier's redeemer fields against the spent PegOut datum, the locked fBTC quantity, `peg_out_utxo_id`, and the supplied raw TM bytes.
-* `peg_out_utxo_id` is **not yet** in the completed-peg-outs trie (MPF non-membership proof), and **is** inserted into the updated root of the continuing Completed-peg-outs output — making each completion once-only.
-* Burned fBTC equals the full (gross) fBTC held in the PegOut UTxO.
-* MIN_ADA is returned to the original withdrawer.
+* **[CPO-1]** The withdraw script MUST verify the supplied block header is in Binocular's confirmed-chain root.
+* **[CPO-2]** The withdraw script MUST verify the TM tx is Merkle-included in that block (txid = `sha256d` of the witness-stripped TM bytes).
+* **[CPO-3]** `peg-out.ak` MUST verify completion is authorized per the PegOut datum's `owner_auth`.
+* **[CPO-4]** The `legit_treasury_movement_and_peg_out_produced` verifier (a withdraw script whose hash is read from the Config UTxO) MUST verify, in one forward scan of the raw TM bytes, that the TM **spends** `source_chain_treasury_utxo_id` — the Bitcoin treasury outpoint named in the PegOut datum.
+* **[CPO-5]** The same verifier MUST verify the TM **produces** an output paying `source_chain_destination_address` exactly
+  `amount − datum.per_pegout_fee` satoshis — gross minus **the fee pinned in this PegOut's own
+  datum at lock time** (see *Treasury Movement → Amounts and fees*). Comparing against the
+  datum-pinned fee, never a current on-chain value, is what makes fee updates race-free (§
+  Operational parameters UTxO). The current implementation runs with `per_pegout_fee = 0`, so
+  the check is exact equality — forward-compatible.
+* **[CPO-6]** `peg-out.ak` MUST cross-check the verifier's redeemer fields against the spent PegOut datum, the locked fBTC quantity, `peg_out_utxo_id`, and the supplied raw TM bytes.
+* **[CPO-7]** The withdraw script MUST verify `peg_out_utxo_id` is **not yet** in the completed-peg-outs trie (MPF non-membership proof).
+* **[CPO-8]** The withdraw script MUST verify `peg_out_utxo_id` **is** inserted into the updated root of the continuing Completed-peg-outs output — making each completion once-only.
+* **[CPO-9]** `peg-out.ak` MUST verify the burned fBTC equals the full (gross) fBTC held in the PegOut UTxO.
+* **[CPO-10]** `peg-out.ak` MUST verify the MIN_ADA is returned to the original withdrawer.
 
 > **Why this cannot pay out twice or match the wrong TM (G28).** The PegOut datum pins the Bitcoin
 > treasury outpoint the paying TM must spend. A Bitcoin outpoint is spendable exactly once, so at
@@ -1837,16 +1845,15 @@ flowchart LR
 
 **Checks enforced on-chain** (`peg-out.ak` spend, `Cancel` action)
 
-* The supplied block header is in Binocular's confirmed-chain root; the supplied tx is
-  Merkle-included in that block.
-* The tx **spends** `source_chain_treasury_utxo_id` — the outpoint named in the PegOut datum.
-* The tx contains **no output** paying `source_chain_destination_address` the amount
+* **[CXL-1]** `peg-out.ak` MUST verify the supplied block header is in Binocular's confirmed-chain root.
+* **[CXL-2]** `peg-out.ak` MUST verify the supplied tx is Merkle-included in that block.
+* **[CXL-3]** `peg-out.ak` MUST verify the tx **spends** `source_chain_treasury_utxo_id` — the outpoint named in the PegOut datum.
+* **[CXL-4]** The `legit_treasury_movement_and_peg_out_not_produced` verifier (Config field #14) MUST verify the tx contains **no output** paying `source_chain_destination_address` the amount
   `locked fBTC − datum.per_pegout_fee` (the fee pinned in this PegOut's datum — the exact mirror
   of the completion check, so the two proofs stay mutually exclusive under any fee-parameter
-  history) — delegated to the `legit_treasury_movement_and_peg_out_not_produced` verifier
-  (Config field #14).
-* Cancel is authorized per the PegOut datum's `owner_auth`.
-* The locked fBTC is paid to the withdrawer — not burned.
+  history).
+* **[CXL-5]** `peg-out.ak` MUST verify the cancel is authorized per the PegOut datum's `owner_auth`.
+* **[CXL-6]** `peg-out.ak` MUST verify the locked fBTC is paid to the withdrawer — not burned.
 
 > **Why cancel can never race a payout.** A Bitcoin outpoint is spent exactly once. Cancel
 > requires a *confirmed* spender of the named outpoint that did *not* pay the peg-out; completion
@@ -1882,15 +1889,16 @@ complete.
 | **Witness data (redeemer)** | branch selector + the branch's proof (below) |
 | **Required signers** | per `owner_auth` |
 
-**Checks enforced on-chain**
+**Checks enforced on-chain** (`peg-in.ak` spend, `Cancel` action)
 
-* Closure is authorized per the datum's `owner_auth`; the PegInRequest NFT is burned.
-* **Branch (a) — deposit refunded**: a Binocular-confirmed Bitcoin transaction spends
+* **[CLR-1]** `peg-in.ak` MUST verify closure is authorized per the datum's `owner_auth`.
+* **[CLR-2]** `peg-in.ak` MUST verify the PegInRequest NFT is burned.
+* **[CLR-3]** **Branch (a) — deposit refunded**: `peg-in.ak` MUST verify a Binocular-confirmed Bitcoin transaction spends
   `peg_in_utxo_id` via the **depositor refund leaf** — the witness is parsed to verify a
   script-path spend of that specific leaf (not the key path, which would be an SPO sweep, and not
   the federation leaf — both legitimate sweeps). This is what makes closure unable to grief a
   depositor whose funds were actually swept.
-* **Branch (b) — duplicate**: an inclusion proof shows `peg_in_utxo_id` is already in the
+* **[CLR-4]** **Branch (b) — duplicate**: `peg-in.ak` MUST verify a trie membership proof showing `peg_in_utxo_id` is already in the
   completed-peg-ins trie — fBTC was already minted via another request; this one is redundant.
 
 > **Implementation status.** The implemented `Cancel` action checks `owner_auth` + NFT burn only;
@@ -1933,13 +1941,13 @@ flowchart LR
 | **Validity interval** | unconstrained |
 | **Required signers** | submitter (fee spend) — permissionless |
 
-**Checks enforced on-chain**
+**Checks enforced on-chain** (the Operational-params validator)
 
-* The continuing output is at the params address and carries the params NFT.
-* The BIP340 signature verifies under the group key read from the Treasury state reference input,
+* **[UOP-1]** The params validator MUST verify the continuing output is at the params address and carries the params NFT.
+* **[UOP-2]** The params validator MUST verify the BIP340 signature under the group key read from the Treasury state reference input,
   over a message committing to the spent params outpoint (replay protection) and the full new
   datum.
-* Parameter sanity: `min_peg_out_fbtc > per_pegout_fee + 330` (Bitcoin P2TR dust); all values
+* **[UOP-3]** The params validator MUST verify parameter sanity: `min_peg_out_fbtc > per_pegout_fee + 330` (Bitcoin P2TR dust); all values
   non-negative; the schedule invariants of the constrained rows in *TM batches and the protocol
   schedule* (e.g. `stability_window` never below the host chain's `3k/f`, deadline ordering,
   `tm_recovery_window` above normal confirmation latency).
@@ -1991,17 +1999,17 @@ sig_msg = sha2_256("bifrost-update-y" ‖ spent_treasury_outpoint (36 B: txid �
                     ‖ epoch (8 B BE) ‖ new_key (32 B))
 ```
 
-**Checks enforced on-chain**
+**Checks enforced on-chain** (`treasury.ak` spend, key-rotation branch)
 
-* The continuing output is at `treasury.ak` and carries the Treasury state NFT.
-* Datum transition per the field-permission matrix (§Treasury state UTxO): only
+* **[UY-1]** `treasury.ak` MUST verify the continuing output is at `treasury.ak` and carries the Treasury state NFT.
+* **[UY-2]** `treasury.ak` MUST verify the datum transition per the field-permission matrix (§Treasury state UTxO): only
   `current_spos_frost_key` changes; `bifrost_identity_root` and the federation fields are
   byte-identical.
-* `verifySchnorrSecp256k1Signature(spent_datum.current_spos_frost_key, sig_msg, signature)` —
+* **[UY-3]** `treasury.ak` MUST verify `verifySchnorrSecp256k1Signature(spent_datum.current_spos_frost_key, sig_msg, signature)` —
   the *outgoing* key authorizes its own succession. In Phase 1 the spent datum holds
   $Y_{federation}$, so the federation signs the first rotation; thereafter each outgoing roster
   hands off to the next.
-* `new_key` is 32 bytes (a valid x-only point).
+* **[UY-4]** `treasury.ak` MUST verify `new_key` is 32 bytes (a valid x-only point).
 
 > **Why submission is permissionless.** The transaction is valid because of *what* it carries,
 > not *who* submits it: the BIP340 group signature can only exist if the threshold (51% of stake
@@ -2017,14 +2025,14 @@ sig_msg = sha2_256("bifrost-update-y" ‖ spent_treasury_outpoint (36 B: txid �
 <!-- G25 (d), ratified 2026-07-15: the guarded recovery from a permanently dead roster. -->
 **Federation reset (Update-Y variant).** Ordinary Update-Y requires the *current* key's
 signature — so a permanently dead roster would deadlock the datum key forever. The reset branch
-breaks the deadlock with two guards:
+breaks the deadlock with these guards:
 
-* it is authorized by a BIP340 signature under **`y_federation`** (datum field #2) — but may set
-  `current_spos_frost_key` **only to `y_federation` itself**, never to an arbitrary key; and
-* it requires a **Binocular-confirmed proof that the treasury tip was spent via the federation
+* **[UY-5]** `treasury.ak` MUST verify the reset is authorized by a BIP340 signature under **`y_federation`** (datum field #2).
+* **[UY-6]** `treasury.ak` MUST verify the reset sets `current_spos_frost_key` **only to `y_federation` itself**, never to an arbitrary key.
+* **[UY-7]** `treasury.ak` MUST verify a **Binocular-confirmed proof that the treasury tip was spent via the federation
   CSV leaf** (witness-parsed script-path check, the same machinery as PegInRequest closure).
 
-The second guard is the objective deadness evidence: the CSV leaf only becomes spendable after
+[UY-7] is the objective deadness evidence: the CSV leaf only becomes spendable after
 the tip sat unmoved for `federation_csv_blocks` — a live roster's coins never age that far, so
 the proof **cannot exist for a live bridge** (see §Federation). Effect: the bridge returns to
 Phase 1 (federation as key-path signer), the roster rebuilds, and the federation signs a fresh

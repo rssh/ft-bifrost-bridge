@@ -1170,8 +1170,10 @@ The SPO-side tree and `treasury.ak` are rooted in their own bootstrap outpoints 
 hashes rather than in the Config, so a client must still be told those identities out of band.
 Closing the gap by mirroring the enforced parameters into the Config datum was considered and
 **dropped** (binocular `38f9e06`): those mirrors existed only to feed an Aiken TM validator's
-config-only oracle read, which became moot once the canonical TM contract moved to Scalus.
-Restoring full discoverability therefore needs a deliberate design pass, not a datum append.
+config-only oracle read, which became moot once the canonical TM contract moved to Scalus. What
+replaces them is not a bare mirror: an identity is appended to the datum so that a client can find
+it, while enforcement stays where the rule above puts it. The next two subsections state that
+requirement and list what is still missing.
 
 **The config NFT policy id is the only value an operator is given (normative).** Everything else an
 off-chain component needs MUST be reachable from it, and a value that is not reachable is a defect

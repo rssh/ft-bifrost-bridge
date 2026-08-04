@@ -57,8 +57,8 @@ freshness filter + trie dedup.
   reading index 3; `ConfigDatum.fulfilled_peg_outs_merkle_tree_policy_id`
   (renamed field 3 — position and type unchanged).
 
-- [ ] **Step 1: Add the constant** (keep `completed_peg_outs_root_asset_name`
-  — the vestigial CPO validator still references it)
+- [ ] **Step 1: Add the constant** (`completed_peg_outs_root_asset_name` is
+  deleted in Task 3 together with the CPO validator)
 
 ```aiken
 pub const fulfilled_peg_outs_root_asset_name = "FPO"
@@ -241,12 +241,12 @@ validator fulfilled_peg_outs_merkle_tree_validator(
 **Files:**
 - Rewrite: `onchain/lib/bifrost/types/peg-out.ak`
 - Rewrite: `onchain/validators/bitcoin/peg-out.ak`
-- Modify: `onchain/validators/bitcoin/completed-peg-outs-merkle-tree.ak`
-  (its spend references `CompletePegOut` from the old redeemer — keep the
-  validator deployed-compatible but its spend now references the new redeemer
-  type; simplest: leave the file untouched if it still compiles against the new
-  `PegOutActionType` constructor names, else adjust the import/match arm. The
-  validator is vestigial; only compilation matters.)
+- Delete: `onchain/validators/bitcoin/completed-peg-outs-merkle-tree.ak`
+  (nothing can ever spend the deployed CPO UTxO after the field-5 swap — its
+  compiled redeemer decode only matches the OLD shape — and fresh deploys do
+  not bootstrap it; dead source goes, per the 7b7a7ee precedent)
+- Modify: `onchain/lib/bifrost/constants.ak` (drop
+  `completed_peg_outs_root_asset_name`)
 
 **Interfaces:**
 - Consumes: `config.get_fulfilled_peg_outs_merkle_tree_policy_id` (Task 1),
@@ -464,11 +464,10 @@ validator peg_out_validator(
 }
 ```
 
-- [ ] **Step 3: Reconcile `completed-peg-outs-merkle-tree.ak`** — it matches
-  `CompletePegOut { .. }` from the old redeemer; the new constructor name is
-  identical, so only the import path stays. Run `aiken check`; if the match arm
-  fails to compile against the new shape, update the arm to
-  `CompletePegOut { .. } -> True`.
+- [ ] **Step 3: Delete `completed-peg-outs-merkle-tree.ak`** and the
+  `completed_peg_outs_root_asset_name` constant; `grep -rn "completed_peg_outs"
+  onchain/` afterwards — remaining hits must only be the repurposed-slot
+  comment in `types/config.ak`.
 
 - [ ] **Step 4: Tests** (same file, aiken test blocks with an off-chain-built
   MPF fixture — build a small trie with `mpf.from_root` + known
@@ -643,9 +642,9 @@ zero-peg-out TM has `fulfilled.tail == Nil` and `fulfilledSteps == Nil`.)
   `AlreadyPresent` when the key is already present with the same value);
   extend the redeemer; add the trie input + continuing output (same address,
   NFT + min-ADA, new root datum).
-- [ ] **Step 2: DeployBridgeCommand** — one-shot bootstrap of the trie UTxO
-  (mirror the completed-peg-outs bootstrap path); genesis config field 3 =
-  the new trie policy (fresh deploys never reference the CPO trie).
+- [ ] **Step 2: DeployBridgeCommand** — one-shot bootstrap of the FPO trie
+  UTxO, replacing the CPO bootstrap outright (reuse its code path); genesis
+  config field 3 = the new trie policy. Fresh deploys create no CPO UTxO.
 - [ ] **Step 3: UpdateConfigCommand** — extend `rewriteFields` with
   `--fulfilled-trie-policy <hash>` (replace index 3) and
   `--peg-out-withdraw-hash <hash>` (replace index 5), keeping raw-field-list
@@ -736,8 +735,9 @@ fn marker_script(por_id: &[u8; 32]) -> ScriptBuf {
   marker-pair output layout; stale Config #15 implementation-status note
   (N7 fields exist) corrected in passing.
 - [ ] **Step 5:** Config table + parameter registry: field 3 re-documented
-  (repurposed slot, swap in the migration); fields 7/8 marked vestigial; the
-  abandoned CPO UTxO noted. UTxO map: fulfilled-trie singleton row.
+  (repurposed slot, swap in the migration); fields 7/8 marked vestigial. UTxO
+  map: fulfilled-trie singleton row replaces the completed-peg-outs row (noted
+  abandoned + permanently unspendable post-swap).
 - [ ] **Step 6:** Runbook: trie bootstrap step, field-3 + field-5 swaps in
   the Update, new reward-account registration for peg_out.
 - [ ] **Step 7: Commit** —

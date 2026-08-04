@@ -179,11 +179,14 @@ getter follows. The migration Update swaps its VALUE to the new trie policy.
 Fields 7/8 (the two TM verifiers) become permanently vestigial (documented;
 positions frozen).
 
+**Deleted**: `completed-peg-outs-merkle-tree.ak` and the `"CPO"` constant —
+nothing needs the completion-side trie any more (see Decisions), and fresh
+deploys stop bootstrapping it.
+
 **Unchanged**: `peg-in.ak` sources (only its applied `tm_nft_policy_id`
 parameter value moves), `bridged-token.ak` (presence-only delegation to the
 peg-out withdraw script — the peg_out hash it reads comes from config field 5,
-swapped by the migration), `completed-peg-outs-merkle-tree.ak` (stays deployed,
-now unused by the flow), `treasury.ak` (FederationReset reads
+swapped by the migration), `treasury.ak` (FederationReset reads
 `spent_via_federation_leaf` — orthogonal; if an emergency federation TM also
 fulfills peg-outs, the same marker scheme applies with no special case).
 
@@ -232,8 +235,11 @@ epoch, no bridge redeployment:
    field 11 anchor as already planned. Register the new peg-in and peg-out
    reward accounts.
 4. Existing PORs at the old peg-out address (if any) predate the new scheme
-   and are handled before the switch; the old completed-peg-outs trie is
-   abandoned in place.
+   and are handled before the switch. The old completed-peg-outs UTxO is
+   abandoned in place — and becomes permanently unspendable after the field-5
+   swap: its deployed validator decodes the peg_out withdraw redeemer with the
+   OLD compiled shape, which the new redeemer never matches (~2 ADA burned in
+   place, accepted).
 
 ### Documentation updates (per the traceability rules)
 
@@ -276,7 +282,11 @@ epoch, no bridge redeployment:
   peg-out input at its credential) — hence the new TM-transition-gated
   validator and a fresh trie UTxO (asset name `"FPO"`, distinct from the
   abandoned `"CPO"` UTxO for indexer clarity). The old UTxO is abandoned in
-  place with no config pointer.
+  place with no config pointer, and its validator source is DELETED from the
+  tree (with the `"CPO"` constant and the deploy bootstrap): after the
+  field-5 swap its spend gate can never be satisfied again (old-shape
+  redeemer decode), so keeping compilable-but-unusable source would only
+  mislead readers — the 7b7a7ee precedent.
 - **Cancel timeout = 30-day validator constant** (like `GcGraceMs`), not a
   config field. SPO margin 7 days. Tunable only by a peg_out script swap via
   config Update (field 5), which is acceptable given the config-swap machinery

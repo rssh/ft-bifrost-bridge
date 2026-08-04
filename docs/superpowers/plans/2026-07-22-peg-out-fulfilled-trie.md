@@ -150,7 +150,7 @@ fn carries_tm_nft(value: assets.Value, tm_nft_policy_id: ByteArray) -> Bool {
 validator fulfilled_peg_outs_merkle_tree_validator(
   //The TM NFT policy = the binocular TreasuryMovementValidator script hash.
   //A direct parameter (not a config read): the TM hash is computable before
-  //this script's, and the TM validator finds THIS policy via config field 17,
+  //this script's, and the TM validator finds THIS policy via config field 3,
   //so there is no parameterization cycle.
   tm_nft_policy_id: ByteArray,
   one_shot_input_ref: OutputReference,
@@ -652,7 +652,7 @@ zero-peg-out TM has `fulfilled.tail == Nil` and `fulfilledSteps == Nil`.)
   operation (works pre-migration).
 - [ ] **Step 4: Verify** — `blueprintPin` + full `SCALUS_SKIP_BLUEPRINT=1 sbt
   "testOnly *"`; `Commit` —
-  `feat(cli): confirm-tmtx trie spend + config field 17 migration path`
+  `feat(cli): confirm-tmtx trie spend + config field 3 migration path`
 
 ---
 

@@ -4,12 +4,18 @@
 // hash). `peg_in.ak::CompletePegIn` references the Confirmed UTxO and reads these fields, so the
 // Constr tags + field order MUST stay identical to the Scalus `TmDatum` enum:
 //
-//   enum TmDatum { Unconfirmed(signedBtcTx)                                          // Constr 0
-//                  Confirmed(btcTxid, sweptPegInUtxoIds, fulfilledPegOuts,
-//                            spentViaFederationLeaf) }                                // Constr 1
+//   enum TmDatum {
+//     Unconfirmed(signedBtcTx, creator, created, epoch, leaderReward)                // Constr 0
+//     Confirmed(btcTxid, sweptPegInUtxoIds, fulfilledPegOuts, spentViaFederationLeaf,
+//               creator, created, epoch, leaderReward) }                             // Constr 1
 //   case class PegOutEntry(scriptPubKey, amount)                                     // Constr 0
 //
-// N10b appended `spent_via_federation_leaf` to Confirmed: at confirm time binocular
+// NOTE: Aiken's `expect` on raw Data validates the constructor's EXACT arity — a shape mismatch
+// here makes every CompletePegIn fail at the datum decode, so this mirror must track the Scalus
+// type verbatim (creator/created were appended for the grace-period GC of Confirmed records;
+// epoch/leader_reward by N7; spent_via_federation_leaf by N10b).
+//
+// N10b put `spent_via_federation_leaf` at Confirmed index 3: at confirm time binocular
 // still holds the signed BTC tx (witnesses intact) and reconstructs the leaf
 // `<federation_csv_blocks> OP_CSV OP_DROP <y_federation> OP_CHECKSIG`, so it records
 // there whether the treasury input was swept via that federation leaf. `treasury.ak`
@@ -22,12 +28,24 @@ pub type PegOutEntry {
 }
 
 pub type TreasuryMovementDatum {
-  // Posted when the signed Bitcoin TM is published to Cardano; carries the full segwit tx bytes.
-  Unconfirmed { signed_btc_tx: ByteArray }
+  // Posted when the signed Bitcoin TM is published to Cardano; carries the full segwit tx bytes
+  // plus provenance: the poster's payment key hash and the posting time (POSIX ms, anchored by
+  // the TM mint policy to equal the tx's validity upper bound).
+  // No Aiken validator decodes this constructor today, but it is mirrored at full arity for the
+  // same reason as Confirmed: the moment one does, a short mirror would crash on the real datum.
+  Unconfirmed {
+    signed_btc_tx: ByteArray,
+    creator: ByteArray,
+    created: Int,
+    epoch: Int,
+    leader_reward: Int,
+  }
   // Produced by binocular `confirm-tmtx` once the TM is Binocular-confirmed: the recomputed txid,
   // the swept peg-in outpoints (each = 36-byte prev_txid(LE) ++ vout), the fulfilled peg-outs,
   // whether the treasury input was spent via the federation CSV leaf (N10b — the dead-roster
-  // evidence consumed by treasury.ak FederationReset), and the N7 provenance fields.
+  // evidence consumed by treasury.ak FederationReset), and the N7 provenance fields carried
+  // verbatim from the Unconfirmed record (the creator may burn the NFT and reclaim the min-ADA
+  // after the 30-day grace period).
   //
   // This MUST list EVERY field of binocular's `TmDatum.Confirmed` in order: Aiken's `expect
   // Confirmed { .. }` requires the on-chain Constr's field COUNT to match this type exactly (the

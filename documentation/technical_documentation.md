@@ -895,7 +895,8 @@ reader trusts a datum only if the UTxO's value contains the NFT.
   decode `ConfigDatum`. Since the Config is never spent, the read is stable forever.
 
 > **Implementation status.** The table above is the deployed `config.ak` datum (#0–16), and
-> `min_stake` (#9) is authoritative there. `config.ak` carries a real `spend` handler: the Config
+> `min_stake` (#9) is authoritative there. It is not closed: the discovery fields required by *The
+> Config as the discovery root* are a pending contract-CR and will append after #16. `config.ak` carries a real `spend` handler: the Config
 > is not immutable, it is governed — see *Config UTxO governance*. The peg-in close verifier field
 > is mirrored as `pegInCloseVerifierScriptHash` in the binocular Scalus types — the Aiken name
 > above is normative.
@@ -1171,6 +1172,37 @@ Closing the gap by mirroring the enforced parameters into the Config datum was c
 **dropped** (binocular `38f9e06`): those mirrors existed only to feed an Aiken TM validator's
 config-only oracle read, which became moot once the canonical TM contract moved to Scalus.
 Restoring full discoverability therefore needs a deliberate design pass, not a datum append.
+
+**The config NFT policy id is the only value an operator is given (normative).** Everything else an
+off-chain component needs MUST be reachable from it, and a value that is not reachable is a defect
+in the datum rather than a field to add to that component's configuration file. The bootstrap needs
+nothing further: the policy id is also the Config script's own hash, because the mint policy and the
+spend script share it, which yields the Config address; the Config NFT is a one-shot, so exactly one
+token exists under that policy for the instance's life, and the single UTxO at that address carrying
+it is the Config. Its asset name is *read from that UTxO*, never configured. From there a component
+reads the datum for the values it needs and derives the remaining script hashes from the blueprints.
+
+Secrets and machine-local settings are out of scope of this rule: signing keys, wallet mnemonics,
+node endpoints and their credentials, and polling intervals configure an *operator*, not a bridge.
+
+<!-- contract-CR: the discovery fields below are specified but not yet in config.ak. -->
+**Not yet reachable (contract-CR).** Seven identities an SPO program needs are absent from the
+datum today and are still handed to operators out of band: the oracle policy id, the TM NFT policy,
+the registry policy and its bootstrap outpoint, the ban-list identity, the authorized
+fault-verifier policies, and the Treasury state NFT identity. Each MUST become a Config-resident
+discovery field.
+
+For the two that are trust anchors — the oracle policy and the TM NFT policy — the Config field is
+a **copy for discovery only**. Enforcement stays on the validator parameter, per *Where each
+identity is fixed* in the creation flow, so the copy adds no governance power over fund safety. It
+is self-verifying rather than trusted: a client derives the reading validator's address from the
+copied value plus the blueprint, then checks that the instance's UTxOs are actually at that
+address. A copy that disagrees with the deployed instance is detected on first use.
+
+Recording the registry and ban-list identities here also settles whether the SPO tree is
+per-instance. The Config names the registry *this* bridge uses. Two instances may record the same
+registry policy id and so share one roster and one ban list, or record different ones and keep them
+separate. That becomes a deployment choice, and neither option needs a new mechanism.
 
 ### Instance lifecycle: retirement and redeploy
 

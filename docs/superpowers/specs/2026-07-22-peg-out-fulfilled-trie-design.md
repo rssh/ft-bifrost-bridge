@@ -167,10 +167,11 @@ verifier delegations, and all SPV proof plumbing are deleted):
   all locked fBTC burnt (exact negative mint), as today. Complete performs
   **no trie insert** — once-only completion is structural (unique POR id,
   single-spend POR UTxO, one marker per paying output).
-- `Cancel`: tx validity interval entirely after `created +
-  peg_out_cancel_timeout_ms`; `mpf.miss(trie_root, por_id, proof)`;
-  `no_bridged_token_mint` (quantity 0) retained — it keeps bridged-token's
-  presence-only burn delegation sound.
+- `Cancel`: the spend MUST be authorized per the datum's `owner_auth` (same
+  gate as Complete — only the requester can cancel); tx validity interval
+  entirely after `created + peg_out_cancel_timeout_ms`;
+  `mpf.miss(trie_root, por_id, proof)`; `no_bridged_token_mint` (quantity 0)
+  retained — it keeps bridged-token's presence-only burn delegation sound.
 - `spend` handler: unchanged own-withdraw delegation.
 - A stale-trie Cancel race is structurally impossible on-chain: referencing the
   trie UTxO pins its current state (a spent trie outpoint cannot be

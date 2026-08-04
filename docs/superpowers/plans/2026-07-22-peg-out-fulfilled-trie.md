@@ -426,7 +426,9 @@ validator peg_out_validator(
   wrong id; partial burn fails; not authorized fails.
   Cancel: happy path after timeout; fails inside timeout (boundary: validity
   lower bound == created + timeout must FAIL, entirely-after semantics);
-  fails with membership id; fails when minting fBTC.
+  fails with membership id; fails when minting fBTC; fails when the canceller
+  is not authorized per owner_auth (a third party cannot cancel someone
+  else's expired request).
   Shared: missing trie NFT on the reference input fails.
 
 - [ ] **Step 4: Verify + build** — `aiken check && aiken build` (regenerates

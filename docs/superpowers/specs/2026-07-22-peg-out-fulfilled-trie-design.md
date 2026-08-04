@@ -236,10 +236,14 @@ epoch, no bridge redeployment:
    reward accounts.
 4. Existing PORs at the old peg-out address (if any) predate the new scheme
    and are handled before the switch. The old completed-peg-outs UTxO is
-   abandoned in place — and becomes permanently unspendable after the field-5
-   swap: its deployed validator decodes the peg_out withdraw redeemer with the
-   OLD compiled shape, which the new redeemer never matches (~2 ADA burned in
-   place, accepted).
+   abandoned in place. It has in fact been unspendable since bootstrap: its
+   spend gate needs the old `CompletePegOut` to validate, which needs the
+   `produced`-verifier withdrawal, which is a dummy hash with no script. The
+   field-5 swap only adds a second lock (the new redeemer shape never decodes
+   as the old one). ~2 ADA stranded, accepted. It cannot be repurposed as the
+   FPO trie: its validator delegates every continuation check (root, NFT,
+   address) to the old `peg-out.ak` logic being deleted, so any tx that
+   satisfied its gate could take the NFT and write an arbitrary root.
 
 ### Documentation updates (per the traceability rules)
 

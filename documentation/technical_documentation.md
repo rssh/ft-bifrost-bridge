@@ -102,7 +102,7 @@ This section collects the acronyms, protocol terms, on-chain validators, mathema
 * **Completed peg-ins trie**: NFT-authenticated singleton UTxO holding an MPF root recording every minted peg-in to prevent double minting (kept outside `treasury.ak` for contention isolation — permissionless mints must not serialize against SPO state updates).
 * **Completed peg-outs trie**: NFT-authenticated singleton UTxO holding a Merkle Patricia Forestry root recording every completed peg-out (keyed by the PegOut UTxO's Cardano outpoint), making completions once-only.
 * **Config UTxO**: NFT-authenticated, **immutable and never-spent** UTxO at `config.ak` holding the instance's wiring (cross-referenced script hashes, token identities, the genesis treasury outpoint); read as a reference input by the other validators (see §Config UTxO).
-* **Operational parameters UTxO**: NFT-authenticated singleton holding the tunable protocol values (fee rate, per-peg-out fee floor, minimums), updated by group-signed roster transactions; read by **no on-chain validator**, so updates invalidate no in-flight transactions (see §Operational parameters UTxO).
+* **Operational parameters**: the tunable protocol values (fee rate, per-peg-out fee floor, minimums, schedule), held as Config datum fields #9 and #12–16; changed by an authorized Config Update and read by **no on-chain validator** — every consumer reads them off-chain at a snapshot slot (see §Operational parameters).
 * **Confirmed (Binocular)**: a Bitcoin block that has 100+ confirmations and has cleared the 200-minute challenge window (see [1]).
 * **Current roster**: the on-chain SPO set currently controlling the treasury and authorized to sign the next TM.
 * **Depositor**: user who locks BTC on Bitcoin to mint fBTC on Cardano.
@@ -164,7 +164,6 @@ Source code for the Aiken validators listed here is published in the Bifrost on-
 | `TreasuryMovementValidator` | Stores SPO-signed Bitcoin TM transactions for watchtower relay; enforces leader-election rules. Scalus contract in binocular (`TreasuryMovementValidator.scala`), not in the Aiken tree. |
 | `bridged-token.ak`     | fBTC mint/burn policy; verifies TM-confirmed peg-in sweeps and Schnorr-signed depositor claims.                                                   |
 | `config.ak`            | Singleton Config NFT + Config UTxO: instance wiring (script hashes, token identities, genesis treasury outpoint), read by all other validators as a reference input; supports authorized Update and Retire (see *Config UTxO governance*). |
-| operational params validator | One-shot params NFT + Operational parameters UTxO: the tunable values (fee rate, fee floor, minimums); spend authorized by the treasury group key; read by no on-chain validator. |
 
 <!-- G35: the complete token inventory. -->
 ### Token inventory
@@ -172,7 +171,6 @@ Source code for the Aiken validators listed here is published in the Bifrost on-
 | Token | Policy | Asset name | Minted / burned by | Purpose |
 |---|---|---|---|---|
 | Config NFT | `config.ak` (one-shot) | mint parameter (deployed: `BIFCFG`) | bootstrap / Retire | instance identity + wiring |
-| Operational params NFT | params validator (one-shot) | mint parameter | bootstrap / never | tunables singleton |
 | Treasury state NFT | treasury bootstrap policy (K1) | `sha256(serialiseData(consumed outpoint))` | K1 / never | SPO-state singleton |
 | Registration-list root | `spos-registry.ak` | `reg-root` | bootstrap / never | registration list anchor |
 | Bifrost Membership Token | `spos-registry.ak` | `pool_id` | register / deregister | one per registered pool |
@@ -329,7 +327,7 @@ Bifrost logic is fully encapsulated in the following solutions:
 * **SPOs program**: this code must run along with the usual SPO stack. It gives SPOs the ability to coordinate to sign Bitcoin transactions and the ability to see and interact with the needed Cardano smart contracts.
 * **Watchtower program**: watchtowers run this software on top of source blockchain and Cardano nodes. It posts source blockchain block headers to the Binocular Oracle, detects peg-in transactions and posts PegInRequest UTxOs on Cardano, and relays SPO-signed Treasury Movement transactions to the source blockchain.
 * Cardano smart contracts:
-  * **config.ak**: mints the one-shot Config NFT and holds the Config UTxO — the immutable spine of the instance, recording every cross-referenced script hash, token identity, and the genesis treasury outpoint (see §Config UTxO). All other validators locate their peers by reading it as a reference input; it is never spent. The tunable values live in the separate **Operational parameters UTxO** (group-signed updates, read by no on-chain validator — see §Operational parameters UTxO).
+  * **config.ak**: mints the one-shot Config NFT and holds the Config UTxO — the spine of the instance, recording every cross-referenced script hash, token identity, the genesis treasury outpoint, and the operational tunables (see §Config UTxO). All other validators locate their peers by reading it as a reference input; it is spent only through the `update_auth` governance path (see §Config UTxO governance). No on-chain validator reads a current tunable — see §Operational parameters.
   * **spos-registry.ak**: SPOs that participate in Bifrost need to register here for the next upcoming epoch. The registry maintains the pool-scoped registration linked-list on-chain. Registration entries are keyed by `pool_id = blake2b_224(cold_vkey)` and store the authorized `bifrost_id_pk` and `bifrost_url` used by the off-chain SPO protocol.
   * **spo-bans.ak**: maintains the pool-scoped ban linked-list on-chain. It consumes verified direct-fault tokens from an allow-list of fault verifier policies and applies time-based ban updates.
   * **fault-verifier-round1.ak / fault-verifier-round2.ak / fault-verifier-equivocation.ak**: specialized verifier policies for DKG Round 1 invalid payloads, DKG Round 2 invalid payloads, and DKG equivocation. Other scripts, including `spo-bans.ak`, consume the resulting tokens instead of re-verifying the raw evidence.
@@ -350,7 +348,7 @@ Depositors, who want to peg-in, send their source blockchain assets to a unique 
 
 Withdrawers, who want to peg-out, lock their bridged assets (e.g. fBTC) at peg-out.ak, specifying their source blockchain destination address in the datum.
 
-SPOs, who register with their delegated stake to join the next epoch in spos-registry.ak, are identified on-chain by their cold-key-derived `pool_id` and authorize a separate Bifrost Secp256k1 identity key for DKG and signing communication. Registration itself is **stake-blind** (a validator cannot read the stake distribution); the `min_stake` filter (Operational parameters UTxO) is applied off-chain at each epoch's candidate enumeration, so an under-staked registrant simply never enters a candidate set — and becomes eligible automatically once its stake grows, with no re-registration.
+SPOs, who register with their delegated stake to join the next epoch in spos-registry.ak, are identified on-chain by their cold-key-derived `pool_id` and authorize a separate Bifrost Secp256k1 identity key for DKG and signing communication. Registration itself is **stake-blind** (a validator cannot read the stake distribution); the `min_stake` filter (Config's operational parameters) is applied off-chain at each epoch's candidate enumeration, so an under-staked registrant simply never enters a candidate set — and becomes eligible automatically once its stake grows, with no re-registration.
 
 At the end of each epoch, the registered SPOs (that normally also include the old group) verify each other's delegated stake to ensure honesty and participate in a DKG ceremony to generate their new shared multisignature address.
 
@@ -403,7 +401,7 @@ authenticates it – and the two layers of dependency that tie the validators to
 
 The diagrams reflect the **implemented** validators in `onchain/validators/bitcoin/`. Where the
 design-normative sections of this document extend them (the extended `ConfigDatum` layout in
-§Config UTxO, the Operational parameters UTxO in §Operational parameters UTxO), the delta is
+§Config UTxO, the operational tunables in §Operational parameters), the delta is
 noted in prose but not drawn.
 
 ### Singleton state UTxOs
@@ -455,9 +453,8 @@ classDiagram
 
 * **Config UTxO** – the instance wiring, read by nearly every other script as a reference
   input. Created once by consuming the parameterized outpoint `(tx0, index0)`; spendable only
-  through the `update_auth` authority (Update / Retire, see §Config UTxO governance). The
-  design-normative extended field layout (genesis treasury outpoint, operational-params NFT
-  identity) is specified in §Config UTxO.
+  through the `update_auth` authority (Update / Retire, see §Config UTxO governance). The datum layout —
+  wiring plus the operational tunables — is specified in §Config UTxO.
 * **Treasury state UTxO** – the SPO-side state: the current Bitcoin treasury address and
   outpoint, the active FROST group key, and the MPF root of active Bifrost identity bindings
   (`bifrost_id_pk → pool_id`). The Treasury NFT asset name is the hash of the outpoint consumed
@@ -468,8 +465,8 @@ classDiagram
 * **Completed-peg-outs UTxO** – MPF root of completed peg-outs, keyed by the PegOut UTxO
   outpoint. Spent and recreated on every peg-out completion (double-burn prevention).
 
-The tunable **Operational parameters UTxO** (§Operational parameters UTxO) is a fifth,
-design-normative singleton: a one-shot params NFT whose datum no on-chain validator reads.
+The tunable **operational parameters** (§Operational parameters) are *not* a further singleton:
+since 2026-07-17 they are Config datum fields, read by no on-chain validator.
 
 ### Linked-list UTxOs: SPO registry and ban list
 
@@ -792,8 +789,8 @@ presence, or token ownership via `authorizer.ak`), as detailed in §Config UTxO 
 
 <!-- G2: new section — the Config UTxO was previously mentioned once and never specified. The
      wiring fields document the implemented config.ak ConfigDatum; the parameters section and the
-     governance spend branch are the normative additions (contract change request: the deployed
-     config.ak has spend = False and no fee fields). -->
+     governance spend branch have since landed: the deployed config.ak has a real spend handler
+     and carries the fee/schedule fields. -->
 ## Config UTxO
 
 The **Config UTxO** is the spine of a bridge instance: a single NFT-authenticated UTxO at
@@ -802,12 +799,13 @@ instance's **wiring**. Every validator that needs another contract's identity re
 a **reference input** — each script is parameterized only by `(config_nft_policy_id,
 config_nft_asset_name)` and locates everything else through the datum.
 
-The Config UTxO is **fully immutable and is never spent** (`config.ak` `spend = False`). This is
-load-bearing, not incidental: a Cardano transaction that references a UTxO is invalidated the
-moment that UTxO is spent, so a mutable Config would knock out every in-flight
-Config-referencing transaction (completions, cancels, TM posts…) at each update. The tunable
-values live in a separate singleton — the **Operational parameters UTxO** (next section) — which
-**no on-chain validator reads**, so updating it invalidates nothing.
+The Config UTxO is spent only through the `update_auth` governance path (§Config UTxO
+governance); outside it the datum is stable. That stability is load-bearing, not incidental: a
+Cardano transaction referencing a UTxO is invalidated the moment that UTxO is spent, so each
+Config Update knocks out the in-flight Config-referencing transactions (completions, cancels, TM
+posts…) built against it — tolerable at governance cadence, which is precisely why the tunables
+(next section), though they now live in this datum, are read **off-chain at a snapshot slot** and
+by no on-chain validator.
 
 **The Config NFT.** Minted exactly once by `config.ak`'s one-shot mint branch, parameterized by
 `(tx0, index0, config_asset_name)`: the mint transaction must consume the outpoint `(tx0,
@@ -846,13 +844,11 @@ them** — each is an off-chain consensus anchor, a pinned-copy source, or a ski
 Fields #12–16 were appended *after* the #11 anchor, so every earlier position is preserved and
 existing readers keep decoding (see *Config UTxO governance* for the append-only rule).
 
-> **Open — the spec still assumes Config fields that are not deployed.** Fields #12–16 above
-> duplicate the `OperationalParamsDatum` of the next section, which this document describes as a
-> separate NFT-authenticated singleton with its own group-signed Update transaction. Later
-> passages also locate identities in Config wiring that the implemented datum does not carry: the
-> Operational-params NFT at `#19–20`, and the Treasury state NFT at `#15–16`. Which side is
-> normative — and whether the params UTxO survives at all — is unresolved. The table above
-> documents what `config.ak` actually deploys.
+Fields #12–16 are the former `OperationalParamsDatum`: that separate contract was **cancelled and
+merged into the Config (decision, 2026-07-17)**, with `min_stake` already Config-resident at #9.
+Updating them is an `update_auth`-authorized Config Update, not a group-signed spend of a second
+singleton — see *Operational parameters*, which keeps the rationale, the costs this trades away,
+and the documented path back to a separate singleton if update cadence or authority ever diverge.
 
 **Reading the Config (how a value is retrieved).** The Config UTxO carries the config NFT and an
 **inline datum**. The NFT is the authenticity mark: anyone can send a UTxO with an arbitrary datum
@@ -870,12 +866,11 @@ reader trusts a datum only if the UTxO's value contains the NFT.
   config_nft_asset_name)` (any chain indexer resolves an NFT to its UTxO), read its inline datum,
   decode `ConfigDatum`. Since the Config is never spent, the read is stable forever.
 
-> **Implementation status.** The deployed `config.ak` (`spend = False`, datum fields #0–17)
-> matches this section's design — the immutability is now normative, not a limitation. Remaining
-> contract-CR deltas: append fields #18–20, and treat the deployed #17 `min_stake` as vestigial
-> (the Operational parameters UTxO is authoritative). The third verifier field is mirrored as
-> `pegInCloseVerifierScriptHash` in the binocular Scalus types — the Aiken name above is
-> normative.
+> **Implementation status.** The table above is the deployed `config.ak` datum (#0–16), and
+> `min_stake` (#9) is authoritative there. `config.ak` carries a real `spend` handler: the Config
+> is not immutable, it is governed — see *Config UTxO governance*. The peg-in close verifier field
+> is mirrored as `pegInCloseVerifierScriptHash` in the binocular Scalus types — the Aiken name
+> above is normative.
 
 <!-- G2 (revised 2026-07-15): the updatable values moved out of the Config into their own
      singleton after the interleaving analysis — (i) spending a referenced UTxO invalidates every
@@ -883,46 +878,56 @@ reader trusts a datum only if the UTxO's value contains the NFT.
      per_pegout_fee update could brick completion AND open a cancel double-pay). Fix: Config
      fully immutable; per_pegout_fee pinned per PegOutDatum; the four tunables below read by no
      on-chain validator. -->
-## Operational parameters UTxO
+## Operational parameters
 
-The **Operational parameters UTxO** is the second singleton of an instance: an NFT-authenticated
-UTxO holding the tunable protocol values. Its defining property: **no on-chain validator ever
-reads it** (one narrow exception: the TM-post linkage check validates the pinned `leader_reward` — an SPO-operational transaction, cheap to rebuild; user-facing transactions never reference it) — every value is either an off-chain consensus anchor, a pinned-copy source, or a floor enforced by the deterministic skip rule — so updating it **invalidates no in-flight user transaction** and can happen
-as often as the Bitcoin fee market requires.
+The **operational parameters** are an instance's tunable protocol values. Their defining property:
+**no on-chain validator ever reads a current value** (one narrow exception: the TM-post linkage
+check validates the pinned `leader_reward` — an SPO-operational transaction, cheap to rebuild;
+user-facing transactions never reference it). Every value is an off-chain consensus anchor, a
+pinned-copy source, or a floor enforced by the deterministic skip rule.
 
-**The Operational-params NFT.** A one-shot mint (same pattern as the Config NFT); its identity is
-recorded in the Config wiring (#19–20), which is how off-chain readers find it.
+**No separate singleton (decision, 2026-07-17).** The tunables are **Config fields**, not a second
+NFT-authenticated UTxO: with `update_auth` governance in place, a params singleton's update policy
+coincided with the Config's, buying complexity without benefit. There is no params NFT and no
+params wiring identity; an *Update operational parameters* is an authorized **Config Update** (see
+the Transaction catalog). The `leader_reward` pin at TM-post reads the Config reference input the
+transaction already carries — one reference input fewer than the split design.
 
-**OperationalParamsDatum:**
+Two costs are accepted rather than hidden: parameter updates now **do** invalidate in-flight
+transactions that reference the Config (tolerable at governance cadence, unlike a fee-market
+cadence), and renouncing `update_auth` freezes the tunables along with the wiring. Both are the
+documented **decoupling trigger**: should tunable cadence (stuck-TM fee bumping) or authority
+(roster vs. root of trust) diverge from Config governance, the tunables move back to a separate
+group-signed singleton — the previous revision of this section, unchanged in the git history.
+
+**The tunables, and where they live in the Config datum:**
 
 | # | Field | Type | Description |
 |---|-------|------|-------------|
-| 0 | `min_stake` | Int (lovelace) | minimum delegated stake to enter the DKG candidate set; read off-chain at candidate enumeration (§Candidate Set and Ordering) |
-| 1 | `fee_rate_sat_per_vb` | Int (sat/vB) | the **exact** Bitcoin miner fee rate for deterministic TM construction (`miner fee = vsize × rate`); read off-chain by every SPO's TM builder; the roster tracks the fee market by group-signing updates (see the signing-model note and *Stuck-TM recovery*) |
-| 2 | `per_pegout_fee` | Int (satoshi) | the **floor** for the per-peg-out protocol fee. The *effective* fee of each peg-out is pinned in its own `PegOutDatum` at lock time; the TM builder skips any peg-out whose datum fee is below this floor at the batch snapshot slot |
-| 3 | `min_peg_out_fbtc` | Int (satoshi) | minimum fBTC a PegOut request may lock (> `per_pegout_fee` + 330-sat dust); a client-side check at request creation and the TM builder's skip threshold |
-| 4 | `leader_reward` | Int (lovelace) | the TM poster's reward, paid by each fBTC mint that claims against the record; **pinned into the TM record datum at post time** — the post-time linkage check validates the pin against this field, the one narrow on-chain read of this UTxO (an SPO-operational tx, cheap to rebuild). *Implementation status*: not yet implemented — the implemented TM datum carries `creator`/`created` (the poster identity + GC timer) but no pinned reward, and no mint-side enforcement exists yet |
-| 5… | schedule parameters | Int (slots) | the epoch/TM schedule — deadlines, batch grid, recovery window (normative table in *TM batches and the protocol schedule*); **effect from the next epoch boundary**, never mid-epoch |
+| 9 | `min_stake` | Int (lovelace) | minimum delegated stake to enter the DKG candidate set; read off-chain at candidate enumeration (§Candidate Set and Ordering) |
+| 12 | `fee_rate_sat_per_vb` | Int (sat/vB) | the **exact** Bitcoin miner fee rate for deterministic TM construction (`miner fee = vsize × rate`); read off-chain by every SPO's TM builder; the roster tracks the fee market by group-signing updates (see the signing-model note and *Stuck-TM recovery*) |
+| 13 | `per_pegout_fee` | Int (satoshi) | the **floor** for the per-peg-out protocol fee. The *effective* fee of each peg-out is pinned in its own `PegOutDatum` at lock time; the TM builder skips any peg-out whose datum fee is below this floor at the batch snapshot slot |
+| 14 | `min_peg_out_fbtc` | Int (satoshi) | minimum fBTC a PegOut request may lock (> `per_pegout_fee` + 330-sat dust); a client-side check at request creation and the TM builder's skip threshold |
+| 15 | `leader_reward` | Int (lovelace) | the TM poster's reward, paid by each fBTC mint that claims against the record; **pinned into the TM record datum at post time** — the post-time linkage check validates the pin against this field, the one narrow on-chain read of this UTxO (an SPO-operational tx, cheap to rebuild). *Implementation status*: not yet implemented — the implemented TM datum carries `creator`/`created` (the poster identity + GC timer) but no pinned reward, and no mint-side enforcement exists yet |
+| 16 | `schedule` (ScheduleParams) | Int (slots) | the epoch/TM schedule — deadlines, batch grid, recovery window (normative table in *TM batches and the protocol schedule*); **effect from the next epoch boundary**, never mid-epoch |
 
-**Update (group-signed).** The params UTxO may be spent only by an *Update operational
-parameters* transaction (see the Transaction catalog):
-
-* the NFT returns to the same address with the new datum;
-* authorized by a BIP340 Schnorr signature under the **current treasury group key** (read from
-  the Treasury state UTxO, located via Config wiring #15–16, as a reference input) — federation
-  in Phase 1, the 51% roster thereafter;
-* the signed message commits to the spent params outpoint (replay protection) and the full new
-  datum.
+**Update (governed).** The tunables change through an authorized **Config Update** (see the
+Transaction catalog): the Config NFT returns to `config.ak` with the new datum, authorized by
+`update_auth` (Config #10). Parameter *sanity* — `min_peg_out_fbtc > per_pegout_fee + 330`
+(Bitcoin P2TR dust), non-negative values, and the schedule invariants of the constrained rows in
+*TM batches and the protocol schedule* — is the governance authority's to enforce; it is no
+longer a separate validator's on-chain check.
 
 **Determinism rule (parameter reads).** Off-chain consumers — deterministic TM construction above
 all — read the params state **as of the relevant TM batch's snapshot slot**, so every SPO uses
 identical values even if an update lands mid-epoch: an update takes effect from the next batch,
 never retroactively.
 
-> **Why no on-chain validator reads this UTxO.** Two interleaving hazards force this. (i) A
-> transaction referencing a UTxO dies when that UTxO is spent — if validators referenced a
-> mutable params UTxO, every update would invalidate the in-flight completions/cancels/posts
-> built against it. (ii) Worse, a *mutable value read at verification time about an event priced
+> **Why no on-chain validator reads a current tunable.** Two interleaving hazards force this.
+> (i) A transaction referencing a UTxO dies when that UTxO is spent — which is why tunables are
+> read off-chain at a snapshot slot rather than by validators at verification time. A Config
+> Update does invalidate in-flight Config-referencing transactions; that is the cost accepted
+> above, bounded by governance cadence. (ii) Worse, a *mutable value read at verification time about an event priced
 > at construction time* is a race: had the completion verifier compared a TM's historical BTC
 > payment against the *current* `per_pegout_fee`, a fee raise after payment would brick the
 > completion (`paid ≠ amount − new_fee`) **and** satisfy the cancel verifier's non-payment check —
@@ -930,10 +935,10 @@ never retroactively.
 > `PegOutDatum` (what the verifiers actually compare against) eliminates the class; the params
 > copy is only the skip-rule floor.
 
-> **Implementation status.** Not yet deployed: the params contract is new, and `PegOutDatum`
-> gains the pinned `per_pegout_fee` field — both contract-CR items. The current deployment runs
-> with `per_pegout_fee = 0` (exact-equality verifiers), which is forward-compatible with the
-> pinned-fee design. `config.ak` needs **no change** (its immutability is now normative).
+> **Implementation status.** The tunables are deployed, as Config #9 and #12–16. `PegOutDatum`
+> still gains the pinned `per_pegout_fee` field (contract-CR); the current deployment runs with
+> `per_pegout_fee = 0` (exact-equality verifiers), which is forward-compatible with the pinned-fee
+> design.
 
 <!-- G16: new section — the Treasury state UTxO previously had no datum spec, and the document
      named two objects ("Treasury state UTxO" / "Treasury Info UTxO") that were never reconciled;
@@ -951,8 +956,8 @@ at all (it is the TM chain's tip — see *Post signed TM*).
 **The Treasury state NFT.** Minted exactly once by the protocol bootstrap (K1): a one-shot mint
 that consumes a chosen outpoint, with asset name `sha256(serialiseData(consumed_outpoint))` — so
 the token is mintable once and identifies this instance's Treasury state for its whole life. The
-identity `(treasury_nft_policy_id, treasury_nft_asset_name)` is recorded in the Config wiring
-(#15–16); every reader locates the UTxO by it. Each update spends and re-produces the UTxO,
+identity is a **validator parameter** of the scripts that read it — the pattern that replaced the
+former Config wiring fields; every reader locates the UTxO by it. Each update spends and re-produces the UTxO,
 carrying the NFT forward.
 
 **TreasuryDatum** (normative):
@@ -1013,8 +1018,8 @@ trust assumptions are exactly these rows — nothing else enters the system.
 | `min_stake` | deployer | Config #9 (reserved, off-chain) | governance Update |
 | header-oracle identity (Binocular oracle NFT policy) | the oracle's own bootstrap | **validator parameter** of the peg validators | never — a different oracle is a different instance |
 | Treasury state NFT identity | K1 bootstrap (consumes a chosen outpoint; name = `sha256(serialiseData(outpoint))`) | **validator parameter** | never — a different treasury state is a different instance |
-| genesis treasury outpoint (`genesis_treasury_utxo_id`) | deployer, **on Bitcoin**, funded and confirmed *before* the Config mint (see the creation flow) | instance wiring — datum append or validator parameter (open contract-CR) | never — it anchors the TM chain |
-| Operational parameters (initial values) + params NFT identity | deployer | the params UTxO; its identity in instance wiring (open contract-CR) | values: group-signed *Update operational parameters* txs (see §Operational parameters UTxO) |
+| genesis treasury outpoint (`initial_btc_treasury_utxo`) | deployer, **on Bitcoin**, funded and confirmed *before* the Config mint (see the creation flow) | Config #11 | re-pointable by governance Update (e.g. after an emergency federation sweep) |
+| Operational parameters (initial values) | deployer | Config #9 and #12–16 | authorized Config Update (see §Operational parameters) |
 | TM authorized-minter key (interim) | deployer | TM-control datum (`TMCTRL`) | interim only — retired by the permissionless TM-posting design (see *Post signed TM*) |
 | authorized fault-verifier policies | deployer/governance | fault-proof policy set (mock today — contract-CR, see §9.2) | contract-CR |
 
@@ -1023,15 +1028,14 @@ trust assumptions are exactly these rows — nothing else enters the system.
 | Input | Enters via | Trust anchor |
 |---|---|---|
 | Bitcoin chain state (headers, tx inclusion) | the Binocular header oracle (`ChainState` reference input) | PoW verification in the oracle validator; watchtower liveness |
-| Cardano stake distribution (registration gate, candidate set) | off-chain snapshot reads at protocol-defined slots | the Cardano ledger itself + the determinism rule (§Operational parameters UTxO) |
+| Cardano stake distribution (registration gate, candidate set) | off-chain snapshot reads at protocol-defined slots | the Cardano ledger itself + the determinism rule (§Operational parameters) |
 | Bitcoin fee market | roster-group-signed params updates (`fee_rate_sat_per_vb`) | 51% roster honesty; snapshot semantics |
 | depositor authorizations | BIP-322 signatures over protocol messages | depositor key possession |
 | governance actions | `update_auth`-authorized Config Update / Retire | the authority named in Config #10 (see *Config UTxO governance*) |
 
-The two rows marked *open contract-CR* — the genesis treasury outpoint and the params NFT
-identity — are external inputs whose on-chain **storage location** (an appended Config field vs.
-a validator parameter) is not yet settled; the values themselves and the moments they become
-fixed are normative as described above.
+Both storage questions that were once open are settled: the genesis treasury outpoint is Config
+#11, and the operational parameters are Config #9 and #12–16 rather than a separate singleton.
+The values themselves and the moments they become fixed are normative as described above.
 
 ## Bridge instance creation flow
 
@@ -1055,11 +1059,10 @@ operator performs:
 4. **Mint the Config NFT** (`config.ak`), creating the Config UTxO whose datum is the spine of the
    instance: it records every cross-referenced script hash and token identity (bridged token,
    block-header tree, completed-peg-ins/-outs trees, peg-in/peg-out withdraw scripts, the peg-out
-   completion verifiers, the treasury NFT identity, the genesis treasury outpoint — which must
-   exist on Bitcoin before this mint — and the Operational-params NFT identity). In the same step,
-   **mint the Operational parameters NFT**: the second one-shot singleton holding the tunable
-   values (fee rate, per-peg-out fee floor, minimum peg-out, minimum stake); see §Operational
-   parameters UTxO.
+   completion verifiers, the treasury NFT identity, and the genesis treasury outpoint — which must
+   exist on Bitcoin before this mint). The same datum carries the initial **operational
+   parameters** (fee rate, per-peg-out fee floor, minimum peg-out, minimum stake, schedule); see
+   §Operational parameters.
    The wiring section must be final at mint time — **the Config NFT is the identity of the
    instance**: a different Config UTxO implies a different fBTC policy, i.e. a *new*,
    non-fungible bridge instance. See §Config UTxO for the datum layout (wiring vs parameters) and
@@ -1582,7 +1585,7 @@ flowchart LR
 A request that fails these is skippable at best and unrecoverable at worst, so software building
 this transaction MUST validate before submitting:
 
-* locked fBTC ≥ `min_peg_out_fbtc` (read from the Operational parameters UTxO) — otherwise the TM
+* locked fBTC ≥ `min_peg_out_fbtc` (read from the Config's operational parameters) — otherwise the TM
   builder skips the request and the withdrawer must cancel;
 * datum `per_pegout_fee` equals the current Operational-params value — a lower value gets the
   request skipped (it is below the floor); a higher value needlessly overpays the protocol;
@@ -1603,7 +1606,7 @@ this transaction MUST validate before submitting:
 | `owner_auth` | `AuthorizationMethod` | authority that completes this peg-out (burn) or reclaims the fBTC if the TM excludes it |
 | `source_chain_destination_address` | `ByteArray` | raw BTC output script where the TM pays (referred to as `btc_destination_scriptPubKey` elsewhere in this document) |
 | `source_chain_treasury_utxo_id` | `ByteArray` | the Bitcoin treasury outpoint (txid ‖ vout) the paying TM must spend — pins this peg-out to exactly one possible TM |
-| `per_pegout_fee` | `Int` (satoshi) | the protocol fee of **this** peg-out, pinned at lock time from the Operational-params value — the TM pays `amount − this fee`, and the completion/cancel verifiers compare against **this** field (never against a current on-chain value, which would race historical payments; see §Operational parameters UTxO) |
+| `per_pegout_fee` | `Int` (satoshi) | the protocol fee of **this** peg-out, pinned at lock time from the Operational-params value — the TM pays `amount − this fee`, and the completion/cancel verifiers compare against **this** field (never against a current on-chain value, which would race historical payments; see §Operational parameters) |
 
 The peg-out **amount** is simply the fBTC quantity held in the UTxO's value — no separate datum field needed.
 
@@ -1886,7 +1889,7 @@ flowchart LR
   `amount − datum.per_pegout_fee` satoshis — gross minus **the fee pinned in this PegOut's own
   datum at lock time** (see *Treasury Movement → Amounts and fees*). Comparing against the
   datum-pinned fee, never a current on-chain value, is what makes fee updates race-free (§
-  Operational parameters UTxO). The current implementation runs with `per_pegout_fee = 0`, so
+  Config's operational parameters). The current implementation runs with `per_pegout_fee = 0`, so
   the check is exact equality — forward-compatible.
 * **[CPO-6]** `peg-out.ak` MUST cross-check the verifier's redeemer fields against the spent PegOut datum, the locked fBTC quantity, `peg_out_utxo_id`, and the supplied raw TM bytes.
 * **[CPO-7]** The withdraw script MUST verify `peg_out_utxo_id` is **not yet** in the completed-peg-outs trie (MPF non-membership proof).
@@ -2005,27 +2008,25 @@ complete.
 > the branch gating above is the normative target (part of the unbuilt failure-mode milestone —
 > contract CR).
 
-<!-- G2 (revised 2026-07-15): updates spend the Operational parameters UTxO, not the Config —
-     the Config is immutable and never spent. New params contract = contract-CR item. -->
+<!-- G2 (revised 2026-07-15; superseded 2026-07-17): the tunables were moved out of the Config
+     into their own singleton, then merged back in when update_auth governance landed. Updates
+     are now authorized Config Updates; the separate params contract is cancelled. -->
 ### Update operational parameters (Cardano)
 
 **Purpose**: change the tunable protocol values (fee rate, per-peg-out fee floor, minimum
-peg-out, minimum stake) — without touching the Config, which is immutable and defines the
-instance identity.
+peg-out, minimum stake, schedule). Since the 2026-07-17 merge these are Config fields (#9,
+#12–16), so this is an authorized **Config Update** — the same transaction that rewires the
+instance — not a separate contract.
 
-**Who**: submission is permissionless — the group signature is the authorization (same principle
-as *Update-Y*). The values are chosen by the roster: each SPO sanity-checks the proposed datum
-against its own view before contributing its partial signature, and refusal is harmless (the old
-values persist).
+**Who**: whoever satisfies `update_auth` (Config #10); `None` means the Config is permanently
+frozen and no update is possible.
 **Trigger**: parameter drift — the Bitcoin fee market above all (see *Stuck-TM recovery*).
 
 ```mermaid
 flowchart LR
-  par["Operational params UTxO<br/>datum: { params }"] --> tx{{"Update operational parameters"}}
+  cfg["Config UTxO<br/>datum: { wiring, params }"] --> tx{{"Config Update"}}
   sub["Submitter UTxO (fees)"] --> tx
-  cfg_ref[["Config UTxO<br/>(reference)"]] -. ref .-> tx
-  tres[["Treasury state UTxO<br/>(reference)"]] -. ref .-> tx
-  tx --> par2["Operational params UTxO′<br/>datum: { params′ }"]
+  tx --> cfg2["Config UTxO′<br/>datum: { wiring, params′ }"]
   tx --> change["Change → submitter"]
 ```
 
@@ -2033,29 +2034,38 @@ flowchart LR
 
 | Role | Content |
 |------|---------|
-| **Inputs** | Operational parameters UTxO; submitter UTxO (fees) |
-| **Reference inputs** | Config UTxO (wiring — locates the treasury NFT); Treasury state UTxO — supplies the current group key |
-| **Mint** | — (the params NFT is carried over) |
-| **Outputs** | Operational parameters UTxO′ at the same address — same NFT, new datum |
-| **Witness data (redeemer)** | new datum + BIP340 signature under the current treasury group key over `(spent params outpoint ‖ new datum)` |
+| **Inputs** | Config UTxO; submitter UTxO (fees) |
+| **Reference inputs** | whatever the configured `update_auth` method needs to prove authorization |
+| **Mint** | — (the Config NFT is carried over) |
+| **Outputs** | Config UTxO′ at the byte-identical address — same NFT, new datum |
+| **Witness data (redeemer)** | `ConfigSpendRedeemer::Update` |
 | **Validity interval** | unconstrained |
-| **Required signers** | submitter (fee spend) — permissionless |
+| **Required signers** | as `update_auth` requires |
 
-**Checks enforced on-chain** (the Operational-params validator)
+**Checks enforced on-chain** (`config.ak` spend, `Update` redeemer)
 
-* **[UOP-1]** The params validator MUST verify the continuing output is at the params address and carries the params NFT.
-* **[UOP-2]** The params validator MUST verify the BIP340 signature under the group key read from the Treasury state reference input,
-  over a message committing to the spent params outpoint (replay protection) and the full new
-  datum.
-* **[UOP-3]** The params validator MUST verify parameter sanity: `min_peg_out_fbtc > per_pegout_fee + 330` (Bitcoin P2TR dust); all values
-  non-negative; the schedule invariants of the constrained rows in *TM batches and the protocol
-  schedule* (e.g. `stability_window` never below the host chain's `3k/f`, deadline ordering,
-  `tm_recovery_window` above normal confirmation latency).
+* **[UOP-1]** `config.ak` MUST verify the spent datum's `update_auth` (#10) is present — `None` is permanently frozen, hence unspendable — and that the transaction satisfies it.
+* **[UOP-2]** `config.ak` MUST verify there is exactly one continuing output at the Config's own script credential, at the byte-identical full address (stake credential included), carrying an inline datum.
+* **[UOP-3]** `config.ak` MUST verify the Config NFT continues in that output and is the only token of the Config's own policy, and that the output's non-ADA value is otherwise unchanged — the Config is a reference input of nearly every bridge transaction, so junk assets would bloat all of them.
+
+**Checks delegated off-chain** (the governing authority)
+
+The new datum's shape and values are deliberately **not** validated on chain: any inline datum is
+accepted, because datum evolution is an explicit goal and readers use positional getters.
+
+* The authority MUST write a datum that current readers can still parse, and MUST keep #10
+  parseable as `Option<AuthorizationMethod>` — anything else halts the bridge or freezes the
+  Config until a later Update repairs it.
+* The authority MUST enforce parameter sanity: `min_peg_out_fbtc > per_pegout_fee + 330` (Bitcoin
+  P2TR dust); all values non-negative; the schedule invariants of the constrained rows in *TM
+  batches and the protocol schedule* (e.g. `stability_window` never below the host chain's `3k/f`,
+  deadline ordering, `tm_recovery_window` above normal confirmation latency).
 
 Off-chain effect: per the determinism rules, new fee values apply from the **next** TM batch
 snapshot and new schedule values from the **next epoch boundary** — never to a batch already
-frozen or in signing. Because no on-chain validator reads this UTxO, the update invalidates
-**no** in-flight transaction.
+frozen or in signing. Unlike the superseded params-singleton design, this update **does**
+invalidate in-flight transactions that reference the Config; the cost is bounded by governance
+cadence (see *Operational parameters*).
 
 <!-- G5: new catalog entry — the Update-Y transaction existed only as narrative (epoch phase,
      DKG finalization step 5, "Key publication"). Requires the key-rotation spend branch in
@@ -2418,7 +2428,7 @@ examples for a mainnet-parameter instance:
 
 | Parameter | Kind | Normative definition / constraint | Example |
 |---|---|---|---|
-| `stability_window` | **derived** | `= 3k/f` of the host Cardano network (see *Cardano stability window*); the params-update validator MUST reject smaller values — it is fund-safety-critical, tunable only upward | 129 600 slots (36 h) |
+| `stability_window` | **derived** | `= 3k/f` of the host Cardano network (see *Cardano stability window*); the governing authority MUST reject smaller values — it is fund-safety-critical, tunable only upward | 129 600 slots (36 h) |
 | `dkg_r1_deadline`, `dkg_r2_deadline` | free | E-relative; `0 < r1 < r2 < update_y_deadline` | E + 1 h / E + 2 h |
 | `update_y_deadline` | constrained | `> dkg_r2_deadline`; early enough that depositors get the new key before meaningful deposit traffic | E + 3 h |
 | `tm_batch_interval` | free | `> sign_r1_window + sign_r2_window +` posting margin | 6 h |
@@ -2427,10 +2437,11 @@ examples for a mainnet-parameter instance:
 | `tm_recovery_window` | **constrained** | **must exceed the normal Binocular confirmation latency** (~100 BTC blocks + challenge ≈ 17–20 h), or healthy TMs are spuriously "recovered"; recommended ≥ 2× expected latency | 36 h |
 | `final_tm_cutoff` | constrained | `≤ epoch_length − (sign windows + posting + tm_recovery_window + handoff margin)` | E + 4 d |
 
-The free and constrained parameters live in the **Operational parameters UTxO** with a second
+The free and constrained parameters live in the **Config datum** (#16, `schedule`) with a second
 effect rule: **schedule parameters take effect from the next epoch boundary** (fee parameters:
 from the next batch) — the schedule can never change under a running epoch. The constraints
-marked MUST are enforced by the params-update validator itself.
+marked MUST are the governing authority's to enforce: `config.ak` accepts any datum shape by
+design (see *Update operational parameters*).
 
 <!-- G37: end-to-end roster-rotation narrative; all placeholders resolved (2026-07 gap review). -->
 ### Periodic consensus change flow (epoch roster rotation)
@@ -3002,7 +3013,7 @@ For a fixed `(epoch, threshold-mode)` DKG instance, the resulting threshold `t` 
 
 ##### 4.1 Candidate Enumeration
 
-All SPOs with valid Bifrost Membership Tokens that are present in the registration linked-list (boundary snapshot), not present in the active ban linked-list, and whose delegated stake at the snapshot is at least `min_stake` (Operational parameters UTxO) are candidates for the DKG.
+All SPOs with valid Bifrost Membership Tokens that are present in the registration linked-list (boundary snapshot), not present in the active ban linked-list, and whose delegated stake at the snapshot is at least `min_stake` (Config's operational parameters) are candidates for the DKG.
 
 ##### 4.2 Canonical Ordering
 
@@ -3026,7 +3037,7 @@ Each SPO $P_i$ performs the following initialization steps:
 1. Determine the current epoch.
 2. Retrieve the registration and ban linked-list states from the end of the previous epoch.
 3. Enumerate all registered SPOs from the registration list and subtract the active ban list.
-4. Query delegated stake for each candidate; drop candidates below `min_stake` (Operational parameters UTxO, boundary snapshot).
+4. Query delegated stake for each candidate; drop candidates below `min_stake` (Config's operational parameters, boundary snapshot).
 5. Compute threshold $t$ as described in Section 3.
 6. Order candidates lexicographically by `bifrost_id_pk` and assign indices.
 7. Verify own participation (own `pool_id` is in the candidate set).
@@ -3492,7 +3503,7 @@ creation-time check, is the bridge's defense against that.
 
 **Amounts and fees.**
 
-- Fee rate: `fee_rate_sat_per_vb` is read from the Operational parameters UTxO (see that section), taken **as of this batch's snapshot slot** so every SPO uses the identical value; a roster update takes effect from the next batch.
+- Fee rate: `fee_rate_sat_per_vb` is read from the Config's operational parameters (see that section), taken **as of this batch's snapshot slot** so every SPO uses the identical value; a roster update takes effect from the next batch.
 - Bitcoin miner fee: `fee = tx_vsize × fee_rate_sat_per_vb` (integer division, rounded up). The transaction vsize is deterministic since all SPOs build the same transaction.
 - Per-peg-out protocol fee: pinned in each `PegOutDatum` at lock time (covering the miner fee share and protocol operating costs); the Operational-params `per_pegout_fee` is only the **floor** the skip rule enforces.
 - Each peg-out output: the fBTC amount locked in the PegOut UTxO minus that peg-out's datum `per_pegout_fee`.
@@ -3923,13 +3934,13 @@ Bifrost's watchtower design relies on a minimal trust assumption: only one hones
 
 | Parameter(s) | Home | Kind | Consumers |
 |---|---|---|---|
-| wiring #0–16, `initial_btc_treasury_utxo` (#18; implemented #11), params NFT identity (#19–20) | Config datum | immutable (instance identity) | all validators, as reference input |
-| `min_stake` | Operational params #0 | updatable | off-chain candidate enumeration |
-| `fee_rate_sat_per_vb` | Operational params #1 | updatable (effect: next batch) | TM builders |
-| `per_pegout_fee` (floor) | Operational params #2 | updatable (effect: next batch) | skip rule; pinned copies in PegOutDatums |
-| `min_peg_out_fbtc` | Operational params #3 | updatable (effect: next batch) | client checks + skip rule |
-| `leader_reward` | Operational params #4 | updatable | pinned into TM records at post; mint-side enforcement |
-| schedule (`dkg_r1/r2_deadline`, `update_y_deadline`, `tm_batch_interval`, `sign_r1/r2_window`, `leader_slot_T`, `tm_recovery_window`, `final_tm_cutoff`, `stability_window`) | Operational params #5… | derived / constrained / free (see the schedule table; effect: next epoch) | every SPO's scheduler |
+| wiring #0–8, `min_stake` #9, `update_auth` #10, `initial_btc_treasury_utxo` #11 | Config datum | governance Update only | all validators, as reference input |
+| `min_stake` | Config #9 | updatable | off-chain candidate enumeration |
+| `fee_rate_sat_per_vb` | Config #12 | updatable (effect: next batch) | TM builders |
+| `per_pegout_fee` (floor) | Config #13 | updatable (effect: next batch) | skip rule; pinned copies in PegOutDatums |
+| `min_peg_out_fbtc` | Config #14 | updatable (effect: next batch) | client checks + skip rule |
+| `leader_reward` | Config #15 | updatable | pinned into TM records at post; mint-side enforcement |
+| schedule (`dkg_r1/r2_deadline`, `update_y_deadline`, `tm_batch_interval`, `sign_r1/r2_window`, `leader_slot_T`, `tm_recovery_window`, `final_tm_cutoff`, `stability_window`) | Config #16 | derived / constrained / free (see the schedule table; effect: next epoch) | every SPO's scheduler |
 | `per_pegout_fee` (effective) | each `PegOutDatum` | pinned at lock time | TM builder; completion + cancel verifiers |
 | `leader_reward` (effective) | each TM record datum | pinned at post time | `bridged-token.ak` mint check |
 | `y_federation`, `federation_csv_blocks` | Treasury state datum #2–3 | per-instance constants (rotatable via the Update-Y federation variant) | address derivation; CSV leaves; federation reset |

@@ -856,7 +856,7 @@ them** — each is an off-chain consensus anchor, a pinned-copy source, or a ski
 | 3 | `completed_peg_outs_merkle_tree_policy_id` | PolicyId | completed-peg-outs trie singleton (NFT asset `"CPO"`). **v2 semantics (rev 5.1, 2026-08-05)**: the trie is written ONLY at TM Confirm, which copies the FROST-attested CPOR1 root; *Complete peg-out* and *Cancel PegOut request* reference it (membership / non-membership proof), never spend it. The field NAME is unchanged from v1; the migration Update swaps only the VALUE, to the rewritten validator's policy id (see the migration runbook) |
 | 4 | `peg_in_withdraw_script_hash` | ByteArray (script hash) | peg-in spend logic (withdraw-script pattern) |
 | 5 | `peg_out_withdraw_script_hash` | ByteArray (script hash) | peg-out spend logic (withdraw-script pattern) |
-| 6 | `peg_in_close_verifier_script_hash` | ByteArray (script hash) | peg-in close verifier — dormant until the F1–F6 milestone; a dummy hash has no reward account, so Cancel is cleanly unsatisfiable |
+| 6 | `peg_in_close_verifier_script_hash` | ByteArray (script hash) | peg-in close verifier — the `Cancel` branch is implemented and reads this field; a deployment that does not offer close sets a dummy hash, which has no reward account, so Cancel is cleanly unsatisfiable |
 | 7 | `legit_treasury_movement_and_peg_out_produced_verifier_script_hash` | ByteArray (script hash) | **Vestigial (withdrawn, rev 5.1).** Named the old peg-out completion verifier; `peg-out.ak::CompletePegOut` no longer reads this field — completion is a value-bound membership proof against the completed-peg-outs trie (see *Complete peg-out*). Retained only for datum-shape stability (append-only evolution; see §Config UTxO governance) |
 | 8 | `legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash` | ByteArray (script hash) | **Vestigial (withdrawn, rev 5.1).** Named the old peg-out cancel verifier; `peg-out.ak::Cancel` no longer reads this field — cancel is a timeout plus a non-membership proof against the completed-peg-outs trie (see *Cancel PegOut request*). Retained only for datum-shape stability |
 | 9 | `min_stake` | Int (lovelace) | off-chain only — heimdall's registration gate is its consumer; no on-chain reader |
@@ -1225,9 +1225,19 @@ silently converts "retire and redeploy" into "funds require the federation escap
 
 In-place repair is deliberately NOT offered for trust-anchor failures: a deep reorg can leave
 bridged tokens circulating whose backing peg-ins no longer exist on Bitcoin, and no re-wiring of
-a live instance can restore that invariant. What holders of a retired instance's bridged tokens
-are owed at migration (successor-side swap vs. burn-and-reissue against audited backing) is an
-**open protocol question**, out of scope of this section.
+a live instance can restore that invariant.
+
+**No holder migration is specified for Bitcoin mainnet (decision, 2026-08-04).** The event that
+destroys backing is a reorg deeper than the header oracle's maturation depth — 100 confirmations
+by default, roughly 17 hours of Bitcoin. That is a testnet and regtest phenomenon; the deepest
+mainnet reorg on record is 53 blocks, in 2010, from the value-overflow bug. Instance replacement
+for this reason is therefore not expected on mainnet, and what an unbacked holder would be owed is
+deliberately left unspecified rather than answered.
+
+Retirement for any *other* reason — a contract defect, a compromised oracle owner key — is a
+different case and not covered by that decision. There the Bitcoin treasury is intact, so the
+successor is funded from it and holders are made whole; that is a deployment procedure rather than
+a protocol rule, and it is out of scope here.
 
 ## Bridge instance creation flow
 

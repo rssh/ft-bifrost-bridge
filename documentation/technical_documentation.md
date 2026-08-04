@@ -1037,6 +1037,31 @@ Both storage questions that were once open are settled: the genesis treasury out
 #11, and the operational parameters are Config #9 and #12–16 rather than a separate singleton.
 The values themselves and the moments they become fixed are normative as described above.
 
+### Instance lifecycle: retirement and redeploy
+
+A bridge instance is **disposable by design**, and keeping it so is a normative constraint on
+every future change. The recovery path for a trust-anchor failure — canonically, a Bitcoin reorg
+deeper than the header oracle's maturation window, dropping transactions the oracle had reported
+confirmed — is **instance replacement, not in-place repair**:
+
+1. the `update_auth` authority **Retires** the Config (burns the instance NFT; bridged-token
+   mint and burn are permanently frozen — see *Config UTxO governance*);
+2. a **successor instance** is bootstrapped against the post-reorg chain: fresh oracle state,
+   fresh one-shots, fresh genesis treasury outpoint (the creation flow below);
+3. the Bitcoin treasury funds move to the successor's treasury address by a group-signed (or,
+   if the FROST group is unavailable, federation CSV-leaf) transaction.
+
+To keep replacement possible and cheap, **every dependence on the oracle or on per-instance
+identity MUST enter a validator as a parameter or live in the (governed) Config — never be
+hard-coded in a script body**. The rows above already follow this rule; a change that breaks it
+silently converts "retire and redeploy" into "funds require the federation escape hatch".
+
+In-place repair is deliberately NOT offered for trust-anchor failures: a deep reorg can leave
+bridged tokens circulating whose backing peg-ins no longer exist on Bitcoin, and no re-wiring of
+a live instance can restore that invariant. What holders of a retired instance's bridged tokens
+are owed at migration (successor-side swap vs. burn-and-reissue against audited backing) is an
+**open protocol question**, out of scope of this section.
+
 ## Bridge instance creation flow
 
 A **bridge instance** is the complete set of on-chain state that one bridged asset (e.g. fBTC for

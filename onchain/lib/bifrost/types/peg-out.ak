@@ -4,63 +4,29 @@ use bifrost/types/general.{AuthorizationMethod}
 pub type PegOutDatum {
   //Auth that can then spend this utxo
   owner_auth: AuthorizationMethod,
-  //The address that will receive the pegged-out tokens on the source chain
+  //The scriptPubKey that receives the pegged-out BTC on the source chain
   source_chain_destination_address: ByteArray,
-  //The utxo id of the Treasury on the source chain
-  source_chain_treasury_utxo_id: ByteArray,
-}
-
-pub type InputCancel {
-  //The actual block header containing the Treasury Movement tx TODO Correct type
-  block_header: ByteArray,
-  //Proof that the passed block header belongs to the source chain
-  block_header_in_source_chain_inclusion_proof: mpf.Proof,
-  //Treasury Movement tx to be parsed
-  treasury_movement_raw_tx: ByteArray,
-  //Treasury Movement tx index in the block
-  treasury_movement_tx_index: Int,
-  //Proof that the Treasury Movement tx is included in the block header
-  treasury_movement_tx_inclusion_proof: List<ByteArray>,
-}
-
-pub type InputCompletePegOut {
-  //The actual block header containing the Treasury Movement tx TODO Correct type
-  block_header: ByteArray,
-  //Proof that the passed block header belongs to the source chain
-  block_header_in_source_chain_inclusion_proof: mpf.Proof,
-  //Treasury Movement tx to be parsed
-  treasury_movement_raw_tx: ByteArray,
-  //Treasury Movement tx index in the block
-  treasury_movement_tx_index: Int,
-  //Proof that the Treasury Movement tx is included in the block header
-  treasury_movement_tx_inclusion_proof: List<ByteArray>,
-  //Treasury Movement PegOut utxo id on the source chain
-  peg_out_utxo_id: ByteArray,
-  //Proof that the PegOut tx is not yet included in the merkle tree of completed PegOuts
-  peg_out_in_completed_peg_outs_exclusion_proof: mpf.Proof,
+  //This peg-out's protocol fee (satoshi), pinned at lock time from the
+  //Config floor (field 13). The TM pays amount − this fee; Complete binds
+  //against THIS field, never a current on-chain value.
+  per_pegout_fee: Int,
+  //POSIX ms creation time, set by the requester. Gates Cancel (created +
+  //peg_out_cancel_timeout_ms). Backdating is harmless: the SPO TM builder
+  //only fulfills fresh requests (freshness margin), so a backdated POR can
+  //only be cancelled — refunding the requester's own fBTC.
+  created: Int,
 }
 
 pub type PegOutActionType {
-  Cancel {
-    cancel_info: InputCancel,
-    //Redeemer index of the withdraw script that checks for treasury movement and PegOut NOT produced
-    tmtilasponpvsh_withdraw_redeemer_index: Int,
-  }
-  CompletePegOut {
-    peg_out_info: InputCompletePegOut,
-    //Index of the input containing the completed_peg_outs merkle tree
-    completed_peg_outs_input_index: Int,
-    //Index of the output containing the completed_peg_outs merkle tree
-    completed_peg_outs_output_index: Int,
-    //List of inclusion proofs to insert all the newly completed PegOuts
-    added_peg_out_to_completed_peg_outs_inclusion_proof: mpf.Proof,
-    //Redeemer index of the withdraw script that checks for treasury movement and PegOut produced
-    tmtilaspopvsh_withdraw_redeemer_index: Int,
-  }
+  //Prove the completed-peg-outs trie maps this POR id to
+  //dest_spk ++ amount_le8 and burn the locked fBTC.
+  CompletePegOut { membership_proof: mpf.Proof }
+  //After the timeout, prove this POR id is NOT in the trie and reclaim.
+  Cancel { exclusion_proof: mpf.Proof }
 }
 
 pub type PegOutWithdrawRedeemer {
   config_ref_input_index: Int,
-  //Type of action with the relative additional data
+  completed_peg_outs_ref_input_index: Int,
   action_type: PegOutActionType,
 }

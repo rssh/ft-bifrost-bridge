@@ -1423,7 +1423,7 @@ sequenceDiagram
     POUT-->>Wdr: MIN_ADA returned to the withdrawer
 
     alt TM did not include the peg-out payment
-        Wdr->>POUT: Cancel — present the Binocular-confirmed TM that spent<br/>the named treasury outpoint and prove it pays no output<br/>to the destination; unlock fBTC and retry
+        Wdr->>POUT: Cancel — present the Binocular-confirmed TM that spent<br/>the named treasury outpoint and prove it pays no output<br/>to the destination — unlock fBTC and retry
     end
 ```
 

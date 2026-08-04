@@ -1227,6 +1227,28 @@ operator performs:
    instance**: a different Config UTxO implies a different fBTC policy, i.e. a *new*,
    non-fungible bridge instance. See §Config UTxO for the datum layout (wiring vs parameters) and
    the governance update path.
+
+**Where each identity is fixed (normative).** A validator cannot compute another contract's hash
+while it runs, because it does not hold that contract's code. Every cross-contract identity must
+therefore be supplied to it, and the steps above supply identities in two different homes. Which
+home an identity gets is a security decision, not a matter of taste:
+
+* An identity a validator relies on to decide **whether funds move** MUST be a **validator
+  parameter**. It is applied at step 3, becomes part of the reading validator's own hash, and
+  therefore cannot be changed for the life of the instance. The oracle policy id (step 1) and the
+  TM NFT policy are the two cases: a different value is a different instance, by construction.
+* An identity that only names **which script performs a delegated check** MAY live in the
+  **Config datum**, written at step 4 and changeable afterwards by an authorized Update. The
+  peg-in close verifier and the peg-out produced / not-produced verifiers (Config #6–#8) are
+  these; note that they are Binocular contracts, so this is also how a Scalus contract's identity
+  reaches an Aiken validator.
+
+The difference is that a datum field holds whatever the `update_auth` authority last wrote. Putting
+a trust anchor there would let governance repoint the bridge's source of Bitcoin truth on a live
+instance; a parameter cannot be repointed at all. Neither kind may be hard-coded as a constant in a
+script body: that makes the compiled artifact instance-specific, so one build could no longer serve
+several bridged assets (Config #1), and it breaks the redeploy property recorded under *Instance
+lifecycle: retirement and redeploy*.
 5. **Mint the completed-peg-ins trie NFT** — its UTxO carries the MPF root, initialized to the
    empty root (32 zero bytes).
 6. **Mint the completed-peg-outs trie NFT** — likewise with the empty root.

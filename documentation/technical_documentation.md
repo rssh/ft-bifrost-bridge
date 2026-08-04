@@ -817,30 +817,42 @@ downstream script (including the fBTC policy), **the Config NFT is the identity 
 instance**: a different Config UTxO implies a different fBTC policy — a new, non-fungible
 instance.
 
-**ConfigDatum.** Every field is an *identity* (a script hash or a `(policy id, asset name)`
-pair) or an instance constant — all **immutable** for the instance's life. Tunable values
-(fees, minimums) are *not* here; they live in the Operational parameters UTxO, whose own identity
-is wiring (#19–20 below):
+**ConfigDatum.** This table tracks the implemented `lib/bifrost/types/config.ak` field-for-field;
+the constructor order is normative, because readers index it positionally. Fields #0–11 are
+instance *wiring* — script hashes, token identities, and the TM-chain anchor — fixed for the
+instance's life. Fields #12–16 are the operational tunables appended after the #11 anchor: unlike
+the wiring they are expected to change, and **no Aiken validator reads a current value from
+them** — each is an off-chain consensus anchor, a pinned-copy source, or a skip-rule floor.
 
 | # | Field | Type | Description |
 |---|-------|------|-------------|
-| 0–1 | `bridged_token_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — fBTC (bridged asset) identity |
-| 2–3 | `source_chain_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — source-chain state tree identity |
-| 4–5 | `block_header_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — block-header tree identity |
-| 6–7 | `completed_peg_ins_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — completed-peg-ins trie identity |
-| 8–9 | `completed_peg_outs_merkle_tree_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — completed-peg-outs trie identity |
-| 10 | `peg_in_withdraw_script_hash` | ByteArray (script hash) | **immutable** — peg-in spend logic (withdraw-script pattern) |
-| 11 | `peg_out_withdraw_script_hash` | ByteArray (script hash) | **immutable** — peg-out spend logic (withdraw-script pattern) |
-| 12 | `legit_treasury_movement_and_peg_in_spent_verifier_script_hash` | ByteArray (script hash) | **immutable** — peg-in close verifier |
-| 13 | `legit_treasury_movement_and_peg_out_produced_verifier_script_hash` | ByteArray (script hash) | **immutable** — peg-out completion verifier (see §Complete peg-out) |
-| 14 | `legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash` | ByteArray (script hash) | **immutable** — peg-out cancel verifier |
-| 15–16 | `treasury_nft_policy_id` / `..._asset_name` | PolicyId / AssetName | **immutable** — Treasury state UTxO identity |
-| 17 | `min_stake` | Int (lovelace) | **vestigial** — kept for positional compatibility with the deployed datum; the authoritative `min_stake` lives in the Operational parameters UTxO |
-| 18 | `initial_btc_treasury_utxo` | ByteArray (36 B: txid ‖ vout LE) | the bridge's initial Bitcoin treasury outpoint; anchor of the **TM chain** (the first-movement branch of the TM linkage check, see *Post signed TM*). Must exist on Bitcoin before the first TM. Re-pointable via a config Update (e.g. after an emergency federation sweep). **Implemented** as field #11 of the deployed 12-field `ConfigDatum` (`lib/bifrost/types/config.ak`), appended via the config Update path. |
-| 19–20 | `operational_params_nft_policy_id` / `..._asset_name` | PolicyId / AssetName | identity of the Operational parameters UTxO (next section) |
+| 0–1 | `bridged_token_policy_id` / `..._asset_name` | PolicyId / AssetName | bridged-asset (fBTC) identity |
+| 2 | `completed_peg_ins_merkle_tree_policy_id` | PolicyId | completed-peg-ins trie singleton |
+| 3 | `completed_peg_outs_merkle_tree_policy_id` | PolicyId | completed-peg-outs trie singleton |
+| 4 | `peg_in_withdraw_script_hash` | ByteArray (script hash) | peg-in spend logic (withdraw-script pattern) |
+| 5 | `peg_out_withdraw_script_hash` | ByteArray (script hash) | peg-out spend logic (withdraw-script pattern) |
+| 6 | `peg_in_close_verifier_script_hash` | ByteArray (script hash) | peg-in close verifier — dormant until the F1–F6 milestone; a dummy hash has no reward account, so Cancel is cleanly unsatisfiable |
+| 7 | `legit_treasury_movement_and_peg_out_produced_verifier_script_hash` | ByteArray (script hash) | peg-out completion verifier (see *Complete peg-out*) |
+| 8 | `legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash` | ByteArray (script hash) | peg-out cancel verifier |
+| 9 | `min_stake` | Int (lovelace) | off-chain only — heimdall's registration gate is its consumer; no on-chain reader |
+| 10 | `update_auth` | Option\<AuthorizationMethod\> | governance — the authority allowed to Update/Retire the Config; `None` = permanently frozen (see *Config UTxO governance*) |
+| 11 | `initial_btc_treasury_utxo` | ByteArray (36 B: txid in internal byte order ‖ vout LE) | the TM-chain anchor the first Treasury Movement must spend; subsequent TMs chain from the previous Confirmed record instead (see *Post signed TM*). Must exist on Bitcoin before the Config mint. Re-pointable via a config Update (e.g. after an emergency federation sweep) |
+| 12 | `fee_rate_sat_per_vb` | Int (sat/vB) | the **exact** Bitcoin miner fee rate for deterministic TM construction (`miner fee = vsize × rate`) |
+| 13 | `per_pegout_fee` | Int (satoshi) | the **floor** for the per-peg-out protocol fee; the *effective* fee pins into each `PegOutDatum` at lock time |
+| 14 | `min_peg_out_fbtc` | Int (satoshi) | minimum bridged-token amount a PegOut request may lock |
+| 15 | `leader_reward` | Int (lovelace) | the TM poster's reward; pinned into the TM record at post time and paid by each fBTC mint that claims against the Confirmed record |
+| 16 | `schedule` | ScheduleParams | the epoch/TM schedule (all Int slots — see *TM batches and the protocol schedule*); one structured field because only off-chain readers consume it, and governance updates replace it wholesale, effective from the next epoch boundary |
 
-Fields 18–20 are appended after the implemented datum's last field (`min_stake`, #17), so the
-positions of all existing fields are preserved.
+Fields #12–16 were appended *after* the #11 anchor, so every earlier position is preserved and
+existing readers keep decoding (see *Config UTxO governance* for the append-only rule).
+
+> **Open — the spec still assumes Config fields that are not deployed.** Fields #12–16 above
+> duplicate the `OperationalParamsDatum` of the next section, which this document describes as a
+> separate NFT-authenticated singleton with its own group-signed Update transaction. Later
+> passages also locate identities in Config wiring that the implemented datum does not carry: the
+> Operational-params NFT at `#19–20`, and the Treasury state NFT at `#15–16`. Which side is
+> normative — and whether the params UTxO survives at all — is unresolved. The table above
+> documents what `config.ak` actually deploys.
 
 **Reading the Config (how a value is retrieved).** The Config UTxO carries the config NFT and an
 **inline datum**. The NFT is the authenticity mark: anyone can send a UTxO with an arbitrary datum

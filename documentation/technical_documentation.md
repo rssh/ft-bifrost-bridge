@@ -1779,7 +1779,28 @@ flowchart LR
 > the same `btc_txid` (the same signed TM posted twice) are possible and harmless — both carry
 > identical content; tooling deduplicates by `btc_txid`.
 
-### Confirm TM tx (Cardano)
+**TM-chain lifecycle** — how records chain from the Config anchor to the current tip. A solid
+arrow **spends** the Cardano UTxO it leaves; a dotted arrow only **references** it.
+Per-transaction details: *Post signed TM* (this entry) and *Confirm TM tx* (next entry).
+
+```mermaid
+flowchart TD
+  cfg[["Config UTxO<br/>initial_btc_treasury_utxo (#11)"]]
+  u1["Unconfirmed TM #1<br/>datum: signed_btc_tx, creator, created"]
+  c1["Confirmed TM #1<br/>btc_txid₁"]
+  u2["Unconfirmed TM #2"]
+  c2["Confirmed TM #2<br/>btc_txid₂ — chain tip"]
+  gc(("TM NFT burned,<br/>min-ADA reclaimed"))
+  stale["Unconfirmed fork<br/>(inert forever — can never confirm)"]
+
+  cfg -. "Post signed TM, Genesis(i) [PTM-5]<br/>reference input; TM #1 input 0 = the anchor outpoint" .-> u1
+  u1 -- "Confirm TM tx [CTM-1..5]<br/>Binocular-confirmed on Bitcoin" --> c1
+  c1 -. "Post signed TM, Chain(i) [PTM-5]<br/>reference input; TM #2 input 0 = (btc_txid₁, 0)" .-> u2
+  u2 -- "Confirm TM tx" --> c2
+  c1 -- "GC by creator after created + 30 d [CTM-6..8]<br/>never the chain tip" --> gc
+  c1 -. "second Chain post from (btc_txid₁, 0)<br/>after TM #2 confirmed" .-> stale
+  c2 -. "governance Config Update MAY re-anchor #11<br/>to the tip (roots a new chain — the Update spends the Config)" .-> cfg
+```
 
 **Purpose**: once the posted TM is confirmed on Bitcoin, transition the TM UTxO from `Unconfirmed` to `Confirmed`. This is where the Binocular proof is checked for the peg-in path; every downstream mint-fBTC reads `Confirmed TM tx` and skips Binocular entirely. (Peg-out completion does **not** read the Confirmed TM — it verifies the raw TM directly against Binocular; see *Complete peg-out*.) Confirm TM tx does **not** touch `treasury.ak`: key rotation is done in a separate Update-Y transaction after DKG, and the treasury pointer needs **no on-chain register at all** — the Confirmed records form the **TM chain** (see *Post signed TM*), and SPOs derive the current treasury outpoint off-chain as the chain's tip, starting from the Config's genesis outpoint.
 

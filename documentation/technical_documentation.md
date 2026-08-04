@@ -2082,6 +2082,11 @@ breaks the deadlock with these guards:
 * **[UY-6]** `treasury.ak` MUST verify the reset sets `current_spos_frost_key` **only to `y_federation` itself**, never to an arbitrary key.
 * **[UY-7]** `treasury.ak` MUST verify a **Binocular-confirmed proof that the treasury tip was spent via the federation
   CSV leaf** (witness-parsed script-path check, the same machinery as PegInRequest closure).
+* **[UY-8]** `treasury.ak` MUST verify that proof is **fresh** — the referenced Confirmed TM's
+  `btc_txid` differs from the spent datum's `last_reset_tm_txid` — and the continuing output MUST
+  advance `last_reset_tm_txid` to that `btc_txid` (§Treasury state UTxO field-permission matrix).
+  [UY-7] alone proves *a* federation-leaf sweep happened, not that it swept the *current* tip, so
+  without this a stale sweep could demote a roster that already recovered.
 
 [UY-7] is the objective deadness evidence: the CSV leaf only becomes spendable after
 the tip sat unmoved for `federation_csv_blocks` — a live roster's coins never age that far, so
@@ -2112,7 +2117,7 @@ first-handoff per §Rollout Phases. The signed message is the Update-Y layout wi
 > contract) rather than porting it into Aiken. *(Precise leaf reconstruction — `spentViaLeaf` against
 > the rebuilt leaf — is still used for PegInRequest CLOSURE, where the deposit tree has MULTIPLE leaves
 > and the revealed one must be disambiguated; the single-leaf treasury needs only the item count.)*
-> **Freshness (anti-replay).** The boolean alone proves *a* federation-leaf sweep occurred,
+> **Freshness (anti-replay) — [UY-8].** The boolean alone proves *a* federation-leaf sweep occurred,
 > not that it swept the *current* tip — so on its own a compromised federation could reference a
 > *stale* federation-swept TM to demote a roster that already recovered (a real theft concern, not
 > just DoS: after such a reset, new deposits derive to `y_federation` addresses the federation can

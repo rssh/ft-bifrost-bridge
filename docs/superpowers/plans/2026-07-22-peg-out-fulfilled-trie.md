@@ -8,7 +8,7 @@ per-peg-out `"POR"` OP_RETURN markers of the TM Bitcoin transaction.
 Spec: `docs/superpowers/specs/2026-07-22-peg-out-fulfilled-trie-design.md`.
 
 **Architecture:** Three repos change. Aiken (`ft-bifrost-bridge/onchain`): config
-field 17, a new trie validator, a rewritten `peg-out.ak`. Scalus (`binocular`):
+field 3 repurposed (renamed), a new trie validator, a rewritten `peg-out.ak`. Scalus (`binocular`):
 the TM Confirm branch gains the marker-pair walk + trie-root fold; CLI gains the
 trie spend and bootstrap. Rust (`heimdall`): the TM builder emits marker pairs
 and the peg-out selection switches from outpoint-pin discipline to the
@@ -33,66 +33,68 @@ freshness filter + trie dedup.
   POR id = `sha2_256(serialise_data(OutputReference))`; trie value =
   `dest_spk ++ amount_le8`; cancel timeout 30 days (ms); heimdall freshness
   margin default 7 days.
-- Ordering constraint: the 18-field binocular `ConfigDatum` mirror decodes only
-  the post-migration config. `UpdateConfigCommand` must keep operating on the
-  RAW field list (it already does), and the new TM script goes live only after
-  the config Update appends field 17.
+- Config slot reuse: NO new config field. Field 3 (type PolicyId, position
+  frozen) is renamed to `fulfilled_peg_outs_merkle_tree_policy_id`; the
+  migration Update swaps its VALUE to the new trie policy. The binocular
+  mirror stays 17 fields (decodes pre- and post-migration configs). The new
+  TM script goes live only after that Update.
 
 ---
 
-### Task 1: Aiken — config field 17 + FPO constant
+### Task 1: Aiken — repurpose config field 3 + FPO constant
 
 **Files:**
 - Modify: `onchain/lib/bifrost/constants.ak`
 - Modify: `onchain/lib/bifrost/types/config.ak`
-- Modify: every `ConfigDatum { ... }` literal in tests
-  (`grep -rn "ConfigDatum {" onchain/` — at least
-  `onchain/lib/bifrost/types/config.ak` pin test,
-  `onchain/validators/bitcoin/config.ak`, `onchain/validators/bitcoin/bridged-token.ak`)
+- Modify: every `ConfigDatum { ... }` literal that names field 3
+  (`grep -rn "completed_peg_outs_merkle_tree_policy_id" onchain/` — at least
+  the `types/config.ak` pin test, `onchain/validators/bitcoin/config.ak:162`,
+  `onchain/validators/bitcoin/bridged-token.ak:85`)
 
 **Interfaces:**
 - Produces: `constants.fulfilled_peg_outs_root_asset_name = "FPO"`;
   `config.get_fulfilled_peg_outs_merkle_tree_policy_id(fields) -> PolicyId`
-  reading index 17; `ConfigDatum.fulfilled_peg_outs_merkle_tree_policy_id`.
+  reading index 3; `ConfigDatum.fulfilled_peg_outs_merkle_tree_policy_id`
+  (renamed field 3 — position and type unchanged).
 
-- [ ] **Step 1: Add the constant**
+- [ ] **Step 1: Add the constant** (keep `completed_peg_outs_root_asset_name`
+  — the vestigial CPO validator still references it)
 
 ```aiken
 pub const fulfilled_peg_outs_root_asset_name = "FPO"
 ```
 
-- [ ] **Step 2: Append the ConfigDatum field (after `schedule`)**
+- [ ] **Step 2: Rename ConfigDatum field 3** from
+  `completed_peg_outs_merkle_tree_policy_id` to
+  `fulfilled_peg_outs_merkle_tree_policy_id` with a comment:
 
 ```aiken
   //Policy id (= script hash) of the fulfilled-peg-outs trie NFT: the MPF of
   //every peg-out ever paid by a confirmed TM, keyed by POR id. Read by the
   //Scalus TM validator (confirm) and peg-out.ak (Complete/Cancel).
+  //REPURPOSED SLOT: held the retired completed-peg-outs trie policy until the
+  //2026-07 migration swapped the value (the old peg-out.ak was its only
+  //on-chain reader; the old CPO UTxO is abandoned in place).
   fulfilled_peg_outs_merkle_tree_policy_id: PolicyId,
 ```
 
-- [ ] **Step 3: Append the getter at index 17 + extend the pin test**
+- [ ] **Step 3: Rename the index-3 getter** to
+  `get_fulfilled_peg_outs_merkle_tree_policy_id` (body unchanged:
+  `safe_list_at(config_fields, 3)`); update the pin-test assertion to the new
+  names. Old `peg-out.ak` still calls the old getter name — it is rewritten in
+  Task 3; until then the build is red, so Tasks 1–3 land as ONE commit series
+  with `aiken check` green only at Task 3's end (or do the mechanical rename
+  in `peg-out.ak` here and let Task 3 delete it).
 
-```aiken
-pub fn get_fulfilled_peg_outs_merkle_tree_policy_id(
-  config_fields: List<Data>,
-) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 17))
-}
-```
-
-In `config_getters_match_datum_fields`, set the new field in the fixture datum
-(e.g. `#"aa12"`) and assert
-`get_fulfilled_peg_outs_merkle_tree_policy_id(fields) == datum.fulfilled_peg_outs_merkle_tree_policy_id`.
-
-- [ ] **Step 4: Fix every other ConfigDatum literal** the compiler now rejects
-  (add the field with a dummy `#"aa12"`-style value).
+- [ ] **Step 4: Fix every ConfigDatum literal** the compiler now rejects
+  (field rename only — values unchanged).
 
 - [ ] **Step 5: Verify**
 
 Run: `cd onchain && aiken check`
-Expected: 0 failures (pin test exercises index 17).
+Expected: 0 failures once the getter rename is threaded (see Step 3 note).
 
-- [ ] **Step 6: Commit** — `feat(onchain): config field 17 - fulfilled-peg-outs trie policy + FPO constant`
+- [ ] **Step 6: Commit** — `feat(onchain): repurpose config field 3 for the fulfilled-peg-outs trie + FPO constant`
 
 ---
 
@@ -494,20 +496,17 @@ validator peg_out_validator(
 
 **Interfaces:**
 - Consumes: `MerklePatriciaForestry` (`verifyMembership`, `insert`), Task 1's
-  config field 17, `"FPO"` asset name.
+  repurposed config field 3, `"FPO"` asset name.
 - Produces: `enum FulfilledStep { Insert(proof); AlreadyPresent(proof) }`;
   `TmConfirmRedeemer(txIndex, txMerkleProof, blockMpfProof, blockHeader,
   fulfilledSteps: ScalusList[FulfilledStep])`; case class
   `FulfilledTrieDatum(root: ByteString)`; confirm-branch marker constants.
 
-- [ ] **Step 1: ConfigTypes — append the mirror field**
-
-```scala
-    fulfilledPegOutsMerkleTreePolicyId: ByteString
-```
-appended after `schedule` in `ConfigDatum` (18th field). Scaladoc note: this
-mirror decodes only the POST-migration 18-field config; commands that touch a
-pre-migration config must keep using the raw field list.
+- [ ] **Step 1: ConfigTypes — rename the mirror field**
+`completedPegOutsMerkleTreePolicyId` → `fulfilledPegOutsMerkleTreePolicyId`
+(field 3; positional, so the rename is free). Scaladoc note: repurposed slot —
+value swapped by the 2026-07 migration Update; the mirror stays 17 fields and
+decodes pre- and post-migration configs alike.
 
 - [ ] **Step 2: Redeemer + datum types**
 
@@ -545,7 +544,7 @@ val cfgOut = tx.referenceInputs
     .find(_.resolved.value.quantityOf(configNftPolicy, configNftName) == BigInt(1))
     .getOrFail("TM confirm: no config reference input")
     .resolved
-val triePolicy = cfgOut.datum.of[ConfigDatum].fulfilledPegOutsMerkleTreePolicyId
+val triePolicy = cfgOut.datum.of[ConfigDatum].fulfilledPegOutsMerkleTreePolicyId // field 3 (repurposed)
 val fpoName = ByteString.fromString("FPO")
 val trieIn = tx.inputs
     .find(_.resolved.value.quantityOf(triePolicy, fpoName) == BigInt(1))
@@ -602,7 +601,7 @@ the reference. `.tail` of `fulfilled` skips the treasury change output; a
 zero-peg-out TM has `fulfilled.tail == Nil` and `fulfilledSteps == Nil`.)
 
 - [ ] **Step 4: Tests** — extend the confirm fixtures with a trie UTxO
-  (in + out), a config reference input (18-field datum), and TM txs built with
+  (in + out), a config reference input (17-field datum), and TM txs built with
   marker pairs. Cases: happy 1-peg-out; happy 3-peg-out; zero-peg-out (empty
   steps, root unchanged); `AlreadyPresent` accepted with same value, rejected
   with different value; wrong final root; missing trie input; forged trie NFT
@@ -634,7 +633,7 @@ zero-peg-out TM has `fulfilled.tail == Nil` and `fulfilledSteps == Nil`.)
   `fulfilled_peg_outs_merkle_tree_validator` (from `onchain/plutus.json`,
   applied params: new TM hash + one-shot ref).
 - Produces: confirm txs that spend the trie UTxO with correct `FulfilledStep`
-  proofs; `UpdateConfigCommand` appends field 17 and swaps field 5.
+  proofs; `UpdateConfigCommand` swaps fields 3 and 5.
 
 - [ ] **Step 1: ConfirmTmtxCommand** — locate the trie UTxO by NFT; rebuild the
   off-chain MPF (reconstruct by replaying all Confirmed records' pairs, or
@@ -645,10 +644,10 @@ zero-peg-out TM has `fulfilled.tail == Nil` and `fulfilledSteps == Nil`.)
   extend the redeemer; add the trie input + continuing output (same address,
   NFT + min-ADA, new root datum).
 - [ ] **Step 2: DeployBridgeCommand** — one-shot bootstrap of the trie UTxO
-  (mirror the completed-peg-outs bootstrap path) and the 18-field genesis
-  config datum.
+  (mirror the completed-peg-outs bootstrap path); genesis config field 3 =
+  the new trie policy (fresh deploys never reference the CPO trie).
 - [ ] **Step 3: UpdateConfigCommand** — extend `rewriteFields` with
-  `--fulfilled-trie-policy <hash>` (append index 17) and
+  `--fulfilled-trie-policy <hash>` (replace index 3) and
   `--peg-out-withdraw-hash <hash>` (replace index 5), keeping raw-field-list
   operation (works pre-migration).
 - [ ] **Step 4: Verify** — `blueprintPin` + full `SCALUS_SKIP_BLUEPRINT=1 sbt
@@ -736,10 +735,11 @@ fn marker_script(por_id: &[u8; 32]) -> ScriptBuf {
   against Binocular" sentence; §Treasury Movement Transaction gains the
   marker-pair output layout; stale Config #15 implementation-status note
   (N7 fields exist) corrected in passing.
-- [ ] **Step 5:** Config table + parameter registry: field 17; fields 7/8
-  marked vestigial. UTxO map: fulfilled-trie singleton row.
-- [ ] **Step 6:** Runbook: trie bootstrap step, field-17 append + field-5 swap
-  in the Update, new reward-account registration for peg_out.
+- [ ] **Step 5:** Config table + parameter registry: field 3 re-documented
+  (repurposed slot, swap in the migration); fields 7/8 marked vestigial; the
+  abandoned CPO UTxO noted. UTxO map: fulfilled-trie singleton row.
+- [ ] **Step 6:** Runbook: trie bootstrap step, field-3 + field-5 swaps in
+  the Update, new reward-account registration for peg_out.
 - [ ] **Step 7: Commit** —
   `docs(spec): peg-out termination via the fulfilled-peg-outs trie`
 

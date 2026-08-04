@@ -103,6 +103,9 @@ pub fn get_completed_peg_ins_merkle_tree_policy_id(
   builtin.un_b_data(safe_list_at(config_fields, 2))
 }
 
+//v2 semantics (2026-07): the trie is written at TM Confirm, keyed by POR id;
+//Complete/Cancel reference it. The migration Update swapped the value to the
+//rewritten validator's hash.
 pub fn get_completed_peg_outs_merkle_tree_policy_id(
   config_fields: List<Data>,
 ) -> PolicyId {

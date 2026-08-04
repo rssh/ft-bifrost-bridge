@@ -1,7 +1,9 @@
-# Peg-Out Fulfilled-Trie Design (OP_RETURN-committed POR ids)
+# Peg-Out Termination via the Completed-Peg-Outs Trie (OP_RETURN-committed POR ids)
 
-Date: 2026-07-22 (rev 2 — per-peg-out `"POR"` markers; aligned with N7/N10b datum
-and the 17-field Config)
+Date: 2026-07-22 (rev 3 — the trie keeps the protocol's existing identity:
+name, `"CPO"` asset name, config field 3. Earlier revisions of this file
+called it the "fulfilled-peg-outs trie"; the file name keeps that working
+title, the design does not.)
 Status: Draft — pending review
 Supersedes: the pinned-treasury-outpoint peg-out completion/cancel scheme
 (technical_documentation.md §Complete peg-out [CPO-1..10], §Cancel PegOut
@@ -25,8 +27,8 @@ verifier scripts. Verified defects:
    discipline.
 3. **Duplicate `(dest, amount)` requests deadlock.** Two identical PORs pinning
    the same tip with one fulfilling output: the second can neither complete
-   (paying outpoint already claimed in the completed trie, [CPO-7]) nor cancel
-   (an output paying `(dest, amount)` exists, so [CXL-4] is unprovable). fBTC
+   (paying outpoint already claimed in the trie, [CPO-7]) nor cancel (an
+   output paying `(dest, amount)` exists, so [CXL-4] is unprovable). fBTC
    locked forever.
 4. **Poor liveness.** A POR is only fulfillable by the single TM spending its
    pinned tip; every request that misses its TM window must cancel, re-create,
@@ -36,14 +38,15 @@ verifier scripts. Verified defects:
 
 ### Core idea
 
-A new **fulfilled-peg-outs Merkle Patricia trie** (NFT-authenticated singleton,
-like the completed-peg-ins trie) records every peg-out ever paid by a confirmed
-TM, keyed by **POR id**. The TM Bitcoin transaction itself commits, in
-FROST-signed **OP_RETURN marker outputs** (one per peg-out), which POR each
-peg-out output fulfills. The TM Confirm transition inserts those entries;
-peg-out Complete proves membership (with value binding), Cancel proves
-non-membership after a timeout. PORs no longer pin a treasury outpoint — any
-future TM can fulfill any pending POR.
+The **completed-peg-outs trie** (the existing NFT-authenticated singleton:
+asset name `"CPO"`, policy id in config field 3) changes what it records and
+when. It becomes the set of every peg-out **paid by a confirmed TM**, keyed by
+**POR id**, and it is written at **TM Confirm** — not at peg-out Complete. The
+TM Bitcoin transaction itself commits, in FROST-signed **OP_RETURN marker
+outputs** (one per peg-out), which POR each peg-out output fulfills. The TM
+Confirm transition inserts those entries; peg-out Complete proves membership
+(with value binding), Cancel proves non-membership after a timeout. PORs no
+longer pin a treasury outpoint — any future TM can fulfill any pending POR.
 
 This inherits the TM confirmed-chain's trust model: the trie is updated only at
 Confirm (oracle-proven Bitcoin reality), the mapping is committed inside the
@@ -89,18 +92,17 @@ epoch, leaderReward)` and `Confirmed(btcTxid, sweptPegInUtxoIds,
 fulfilledPegOuts, spentViaFederationLeaf, creator, created, epoch,
 leaderReward)`. Marker outputs appear inside `fulfilledPegOuts` as inert
 zero-amount entries, like the treasury change entry. No mirror churn in
-`treasury-movement.ak` / heimdall parsers.
+`treasury-movement.ak` / heimdall parsers. `ConfigTypes.scala` is untouched —
+the trie policy is read from the existing mirror field
+`completedPegOutsMerkleTreePolicyId` (field 3).
 
 The Confirm spend branch gains, on top of its current checks (oracle proof,
 datum reconstruction, federation-leaf flag):
 
 1. Locate the Config UTxO among reference inputs (by config NFT — parameters
-   already applied) and read field 3 — repurposed by the migration from the
-   retired completed-peg-outs trie to the fulfilled-trie NFT policy id (see
-   Decisions).
-2. Require the fulfilled-trie UTxO (its NFT, constant asset name) to be
-   **spent** in this tx, with a continuing output carrying the NFT: same
-   address, non-lovelace value preserved.
+   already applied) and read field 3, the completed-peg-outs trie policy id.
+2. Require the trie UTxO (its NFT, asset name `"CPO"`) to be **spent** in this
+   tx, with a continuing output carrying the NFT at the same address.
 3. Pair up the parsed outputs: after the change output, outputs come in
    (payment, marker) pairs — the marker's scriptPubKey must be
    `6a 23 "POR" ++ por_id` and the payment output must not itself be an
@@ -124,20 +126,23 @@ unchanged).
 
 ### On-chain: Aiken
 
-**New `fulfilled-peg-outs-merkle-tree.ak`** (modeled on
-`completed-peg-outs-merkle-tree.ak`):
+**`completed-peg-outs-merkle-tree.ak` rewritten in place** (same file, same
+datum `{root}`, same `"CPO"` asset name, same one-shot bootstrap mint; new
+parameterization and a new spend gate):
 
-- `mint`: one-shot bootstrap — spends a designated input, mints the single NFT
-  (constant asset name) into an output at its own script address with the
-  empty MPF root datum `{root}`.
+- Parameters become `(tm_nft_policy_id: ByteArray, one_shot_input_ref:
+  OutputReference)` — the config NFT parameters go (the old spend read the
+  peg_out hash from config field 5; the new spend reads nothing from config).
+- `mint`: unchanged one-shot bootstrap — empty MPF root, NFT to its own
+  script address.
 - `spend`: permitted iff the same tx performs a TM Confirm transition: an
   input carrying the TM NFT (policy = the `tm_nft_policy_id` parameter, empty
   asset name) whose inline datum is Constr **0** (Unconfirmed), and an output
   carrying that NFT with datum Constr **1** (Confirmed). Constructor-tag
   checks on raw Data only — no field decoding, so no arity coupling to the
   Scalus datum shape. Root/value/address correctness of the continuation is
-  enforced by the Scalus confirm branch (mirror of how the completed trie
-  delegates to `peg_out.ak`).
+  enforced by the Scalus confirm branch in the same tx (the same
+  delegation-by-pairing the old design used toward `peg_out.ak`).
 
 **`peg-out.ak` rewrite** (dramatic simplification — the oracle input, both
 verifier delegations, and all SPV proof plumbing are deleted):
@@ -149,18 +154,19 @@ verifier delegations, and all SPV proof plumbing are deleted):
   `per_pegout_fee` pinned at lock time from Config #13 as already normative in
   the doc, `created` (POSIX ms) added for the cancel timeout.
 - New constant `peg_out_cancel_timeout_ms = 30 * 24 * 3600 * 1000` (30 days).
-- `withdraw` redeemer: `{config_ref_input_index, fulfilled_trie_ref_input_index,
-  action}` with `action = CompletePegOut{membership_proof} |
-  Cancel{exclusion_proof}`.
-- Shared: read config (field 3 → trie NFT policy); the fulfilled trie is a
-  **reference input** (found at the given index, authenticated by its NFT) —
-  Complete/Cancel never spend the singleton, removing that contention;
-  `por_id = utils.hash_output_ref(peg_out_input.output_reference)`;
+- `withdraw` redeemer: `{config_ref_input_index,
+  completed_peg_outs_ref_input_index, action}` with
+  `action = CompletePegOut{membership_proof} | Cancel{exclusion_proof}`.
+- Shared: read config (field 3 → trie NFT policy, via the existing getter);
+  the trie is a **reference input** (found at the given index, authenticated
+  by its NFT) — Complete/Cancel never spend the singleton, removing that
+  contention; `por_id = utils.hash_output_ref(peg_out_input.output_reference)`;
   `owner_auth` authorization as today.
 - `CompletePegOut`: `mpf.has(trie_root, por_id,
   dest_script_pub_key ++ int_to_le8(fbtc_amount - per_pegout_fee), proof)`;
-  all locked fBTC burnt (exact negative mint), as today. The completed-
-  peg-outs trie is **no longer touched** (see Decisions).
+  all locked fBTC burnt (exact negative mint), as today. Complete performs
+  **no trie insert** — once-only completion is structural (unique POR id,
+  single-spend POR UTxO, one marker per paying output).
 - `Cancel`: tx validity interval entirely after `created +
   peg_out_cancel_timeout_ms`; `mpf.miss(trie_root, por_id, proof)`;
   `no_bridged_token_mint` (quantity 0) retained — it keeps bridged-token's
@@ -171,24 +177,14 @@ verifier delegations, and all SPV proof plumbing are deleted):
   referenced), and the deeper signed-but-unconfirmed-TM race is closed by the
   SPO freshness margin (below).
 
-**`config.ak` / `types/config.ak`**: NO new field. Field 3 is renamed
-`completed_peg_outs_merkle_tree_policy_id` →
-`fulfilled_peg_outs_merkle_tree_policy_id` (position and type unchanged — the
-frozen contract is positions + types; the rename is documentation) and its
-getter follows. The migration Update swaps its VALUE to the new trie policy.
-Fields 7/8 (the two TM verifiers) become permanently vestigial (documented;
-positions frozen).
-
-**Deleted**: `completed-peg-outs-merkle-tree.ak` and the `"CPO"` constant —
-nothing needs the completion-side trie any more (see Decisions), and fresh
-deploys stop bootstrapping it.
-
-**Unchanged**: `peg-in.ak` sources (only its applied `tm_nft_policy_id`
-parameter value moves), `bridged-token.ak` (presence-only delegation to the
-peg-out withdraw script — the peg_out hash it reads comes from config field 5,
-swapped by the migration), `treasury.ak` (FederationReset reads
-`spent_via_federation_leaf` — orthogonal; if an emergency federation TM also
-fulfills peg-outs, the same marker scheme applies with no special case).
+**Unchanged**: `types/config.ak` and `constants.ak` (field 3 and `"CPO"` keep
+their names; only field 3's VALUE changes at migration — a comment on the
+field notes the v2 semantics), `peg-in.ak` sources (only its applied
+`tm_nft_policy_id` parameter value moves), `bridged-token.ak` (presence-only
+delegation to the peg-out withdraw script — the peg_out hash it reads comes
+from config field 5, swapped by the migration), `treasury.ak` (FederationReset
+reads `spent_via_federation_leaf` — orthogonal; if an emergency federation TM
+also fulfills peg-outs, the same marker scheme applies with no special case).
 
 ### Off-chain: heimdall
 
@@ -205,18 +201,20 @@ fulfills peg-outs, the same marker scheme applies with no special case).
   requester's own fBTC) and bounds the signed-but-not-yet-confirmed TM race.
 - POR scanner: read PORs from the peg-out address with the new datum shape;
   compute POR ids (Plutus-Data CBOR + sha2_256); skip PORs whose id is
-  already in the fulfilled trie (dedup against double-fulfillment, which the
-  on-chain `AlreadyPresent` tolerance additionally defuses).
-- `publish.rs` / confirm flow: the TM Confirm tx now also spends the
-  fulfilled-trie UTxO and supplies the MPF step proofs (off-chain MPF
-  maintained from the trie datum history / recomputed from Confirmed records).
+  already in the trie (dedup against double-fulfillment, which the on-chain
+  `AlreadyPresent` tolerance additionally defuses).
+- `publish.rs` / confirm flow: the TM Confirm tx now also spends the trie
+  UTxO and supplies the MPF step proofs (off-chain MPF maintained from the
+  trie datum history / recomputed from Confirmed records).
 
 ### Off-chain: binocular
 
 - `ConfirmTmtxCommand`: build the extended confirm tx — spend the trie UTxO,
   compute insert proofs, extended `TmConfirmRedeemer`.
-- `DeployBridgeCommand` / `UpdateConfigCommand`: bootstrap the trie one-shot
-  and the new config field (below).
+- `DeployBridgeCommand`: bootstrap the trie with the rewritten validator
+  (new parameterization: TM script hash + one-shot ref).
+- `UpdateConfigCommand`: swap field 3 (new trie policy) and field 5 (new
+  peg_out hash) for the live migration.
 - Validator tests: marker parsing, pair walk, insert fold, `AlreadyPresent`
   path, missing/wrong trie input, malformed marker / odd output count /
   wrong-prefix tags, zero-peg-out TMs.
@@ -227,26 +225,23 @@ Extends `documentation/tm-chain-migration-runbook.md`; still one config Update
 epoch, no bridge redeployment:
 
 1. Build the new TM script (hash changes) → new peg-in hash (parameter) → new
-   peg_out hash (rewrite) → trie validator hash (parameterized by the new TM
-   hash).
-2. One-shot mint the fulfilled-trie UTxO (empty root).
-3. Config Update: swap field 3 (→ the fulfilled-trie policy id), swap
-   field 4 (peg-in withdraw hash), swap field 5 (peg-out withdraw hash),
-   field 11 anchor as already planned. Register the new peg-in and peg-out
-   reward accounts.
+   peg_out hash (rewrite) → new trie script hash (rewritten validator,
+   parameterized by the new TM hash).
+2. One-shot mint the new completed-peg-outs trie UTxO (empty root).
+3. Config Update: swap field 3 (→ the new trie policy id), swap field 4
+   (peg-in withdraw hash), swap field 5 (peg-out withdraw hash), field 11
+   anchor as already planned. Register the new peg-in and peg-out reward
+   accounts.
 4. Existing PORs at the old peg-out address (if any) predate the new scheme
-   and are handled before the switch. The old completed-peg-outs UTxO is
-   abandoned in place. It has in fact been unspendable since bootstrap: its
-   spend gate needs the old `CompletePegOut` to validate, which needs the
-   `produced`-verifier withdrawal, which is a dummy hash with no script. The
-   field-5 swap only adds a second lock (the new redeemer shape never decodes
-   as the old one). ~2 ADA stranded, accepted. It cannot be repurposed as the
-   FPO trie: its validator delegates every continuation check (root, NFT,
-   address) to the old `peg-out.ak` logic being deleted, so any tx that
-   satisfied its gate could take the NFT and write an arbitrary root.
+   and are handled before the switch. The old trie UTxO instance is abandoned
+   in place (it was never spendable — its gate chains through the dummy
+   `produced` verifier; ~2 ADA stranded, accepted).
 
 ### Documentation updates (per the traceability rules)
 
+- §Completed-peg-outs trie / UTxO map: re-specify the trie — written at TM
+  Confirm, keyed by POR id, value `dest_spk ++ amount_le8`; Complete/Cancel
+  reference it, never spend it.
 - §Complete peg-out: mark [CPO-1], [CPO-2], [CPO-4]–[CPO-8] **withdrawn**
   (superseded by this design); keep [CPO-3] (owner_auth), [CPO-9] (exact
   burn), [CPO-10] (min-ADA return); add fresh IDs (continue numbering,
@@ -257,10 +252,12 @@ epoch, no bridge redeployment:
   and its footgun warnings, add `created`), updated client-side checks.
 - §Confirm TM tx: add the trie-update checks with new [CTM-*] IDs; fix the
   "peg-out completion … verifies the raw TM directly against Binocular"
-  statement; TM structure gains the marker-pair layout.
-- §Treasury Movement Transaction / UTxO map / Config table (field 3
-  re-documented as the fulfilled-peg-outs trie) / parameter registry; note
-  fields 7/8 vestigial and the old completed-peg-outs UTxO abandoned.
+  statement; §Treasury Movement Transaction gains the marker-pair layout;
+  stale Config #15 implementation-status note (N7 fields exist) corrected in
+  passing.
+- Config table: field 3 keeps its name; row text gains the v2 semantics +
+  migration value swap. Fields 7/8 marked vestigial. Parameter registry rows
+  accordingly.
 
 ### Decisions (defaults adopted; flag to flip)
 
@@ -269,28 +266,20 @@ epoch, no bridge redeployment:
   standardness and the `"BFR"` beacon-scan collision). Fallback
   `(spk, amount)` keying rejected: insert collisions would permanently stall
   the TM chain and identical repeat peg-outs would be impossible.
+- **The trie keeps the protocol's existing identity** (user-selected): name
+  "completed-peg-outs trie", asset name `"CPO"`, config field 3 (name, getter,
+  position, type all unchanged — only the VALUE is swapped at migration to the
+  rewritten validator's hash). No parallel "fulfilled" concept. The deployed
+  old instance cannot be upgraded in place (immutable script whose gate
+  delegates continuation checks to the old `peg-out.ak`), so the migration
+  bootstraps a fresh UTxO under the rewritten validator.
 - **POR identity/created = plain UTxO + SPO freshness filter** (no POR mint
   policy). The margin filter fully covers backdating; a PIR-style mint-gated
   POR NFT (anchoring `created` at the validity bound) remains the upgrade path
   if an on-chain guarantee is later wanted.
-- **Completed-peg-outs trie retired; its config slot (field 3) repurposed.**
-  POR ids are unique and a POR UTxO spends exactly once, so double-completion
-  is impossible without the completion-side trie; dropping it removes the
-  per-Complete singleton contention. After the peg-out rewrite NO on-chain
-  reader of field 3 remains (verified: old `peg-out.ak` was the only one), so
-  the migration swaps its value to the new trie policy instead of appending a
-  field 17 — the binocular `ConfigDatum` mirror stays 17 fields and decodes
-  pre- and post-migration configs alike. The old trie UTxO itself CANNOT be
-  reused: its deployed validator gates spends on a `peg_out` withdraw run with
-  a `CompletePegOut` action, and a TM Confirm tx cannot run that withdraw (no
-  peg-out input at its credential) — hence the new TM-transition-gated
-  validator and a fresh trie UTxO (asset name `"FPO"`, distinct from the
-  abandoned `"CPO"` UTxO for indexer clarity). The old UTxO is abandoned in
-  place with no config pointer, and its validator source is DELETED from the
-  tree (with the `"CPO"` constant and the deploy bootstrap): after the
-  field-5 swap its spend gate can never be satisfied again (old-shape
-  redeemer decode), so keeping compilable-but-unusable source would only
-  mislead readers — the 7b7a7ee precedent.
+- **Complete performs no trie write.** The trie is written at TM Confirm only;
+  Complete/Cancel use it as a reference input, removing the per-Complete
+  singleton contention of the old design.
 - **Cancel timeout = 30-day validator constant** (like `GcGraceMs`), not a
   config field. SPO margin 7 days. Tunable only by a peg_out script swap via
   config Update (field 5), which is acceptable given the config-swap machinery
@@ -320,6 +309,6 @@ epoch, no bridge redeployment:
 - Aiken: `peg-out.ak` Complete/Cancel suites (membership value binding, fee
   arithmetic, timeout boundary, exclusion proof, owner auth, burn exactness,
   no-mint-on-cancel); trie validator suites (bootstrap one-shot, spend gated
-  on TM transition, constr-tag checks); config getter pin test for the renamed field 3.
+  on TM transition, constr-tag checks).
 - heimdall: builder marker-pair determinism, freshness filter boundaries, id
   hashing golden vectors against Aiken's `hash_output_ref`.

@@ -1147,24 +1147,19 @@ operator performs:
    transaction. The *not*-produced verifier (field 8) and the close verifier (field 6) stay
    unregistered by design; see the catalog entry for why, and for the certificate, deposit, ordering
    and idempotency rules.
-7. ~~Mint the TM-control UTxO~~ — **removed**: TM records mint permissionlessly, gated by the
-   TM-chain linkage check against the Config's initial treasury outpoint or the predecessor
-   Confirmed record (see *Post signed TM*). The interim `TMCTRL` authorized-minter singleton has
-   been retired: the `TreasuryMovementValidator` is now parameterized by `(oracle script hash,
-   config NFT policy, config NFT asset name)` and its mint branch implements the linkage check.
-8. **Bootstrap the SPO-side state** (see §SPO Bootstrap Flow): the Treasury state NFT + UTxO at
+7. **Bootstrap the SPO-side state** (see §SPO Bootstrap Flow): the Treasury state NFT + UTxO at
    `treasury.ak` (initial keys and an empty `bifrost_identity_root`), the registration-list root
    (`reg-root`), and the ban-list root (`ban-root`).
    The initial TreasuryDatum seeds `current_spos_frost_key` with $Y_{federation}$, so Phase-1
    address derivation, signing (federation as key-path signer), and governance work with no
    special cases (see §Treasury state UTxO and §Rollout Phases); the genesis treasury outpoint
-   is created by the deployer before step 4 (see step 11).
-9. **Deploy reference scripts (CIP-33)** for the large validators, so user transactions reference
+   is created by the deployer before step 4 (see step 10).
+8. **Deploy reference scripts (CIP-33)** for the large validators, so user transactions reference
    them instead of carrying the script bytes.
-10. **Publish the instance parameters** — the Config NFT policy id + asset name and the fBTC
-    policy id — to client software. Wallets, watchtowers, and SPO programs locate all other state
-    UTxOs through the Config datum's cross-references.
-11. **Open for use.** Registration opens immediately, and deposits are safe from the start:
+9. **Publish the instance parameters** — the Config NFT policy id + asset name and the fBTC
+   policy id — to client software. Wallets, watchtowers, and SPO programs locate all other state
+   UTxOs through the Config datum's cross-references.
+10. **Open for use.** Registration opens immediately, and deposits are safe from the start:
     peg-in addresses derive from the K1 datum key — $Y_{federation}$ in Phase 1 (see §Rollout
     Phases), with no special cases. The **genesis treasury outpoint** was created by the deployer
     *before* step 4: derive the Phase-1 treasury address (ordinary derivation, internal key = the

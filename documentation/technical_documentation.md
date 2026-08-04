@@ -1018,7 +1018,7 @@ trust assumptions are exactly these rows — nothing else enters the system.
 | `min_stake` | deployer | Config #9 (reserved, off-chain) | governance Update |
 | header-oracle identity (Binocular oracle NFT policy) | the oracle's own bootstrap | **validator parameter** of the peg validators | never — a different oracle is a different instance |
 | Treasury state NFT identity | K1 bootstrap (consumes a chosen outpoint; name = `sha256(serialiseData(outpoint))`) | **validator parameter** | never — a different treasury state is a different instance |
-| genesis treasury outpoint (`initial_btc_treasury_utxo`) | deployer, **on Bitcoin**, funded and confirmed *before* the Config mint (see the creation flow) | Config #11 | re-pointable by governance Update (e.g. after an emergency federation sweep) |
+| genesis treasury outpoint (`initial_btc_treasury_utxo`) | deployer, **on Bitcoin**, funded and confirmed *before* the Config mint (see the creation flow) | Config #11 | re-pointable by governance Update — which deliberately roots a **new** TM chain, the emergency federation-sweep recovery; outside that case a re-anchor would orphan the existing chain |
 | Operational parameters (initial values) | deployer | Config #9 and #12–16 | authorized Config Update (see §Operational parameters) |
 | TM authorized-minter key (interim) | deployer | TM-control datum (`TMCTRL`) | interim only — retired by the permissionless TM-posting design (see *Post signed TM*) |
 | authorized fault-verifier policies | deployer/governance | fault-proof policy set (mock today — contract-CR, see §9.2) | contract-CR |
@@ -1036,6 +1036,35 @@ trust assumptions are exactly these rows — nothing else enters the system.
 Both storage questions that were once open are settled: the genesis treasury outpoint is Config
 #11, and the operational parameters are Config #9 and #12–16 rather than a separate singleton.
 The values themselves and the moments they become fixed are normative as described above.
+
+### The Config as the discovery root
+
+The config NFT pair (`policy id`, asset name) is meant to be the **single identity an off-chain
+client needs**: holding it plus the CIP-57 blueprint, a client *derives* every contract identity
+and *reads* all runtime wiring from the Config datum, so the bridge can change without redeploying
+its clients. That is the normative direction — a component identity MUST be either derivable from
+the config root (its contract parameterized by the config NFT pair) or Config-resident. An
+identity that requires an out-of-band value breaks the property.
+
+The deployed tree satisfies this only in part:
+
+| Contract | Parameters | Config-rooted? |
+|---|---|---|
+| `bridged-token.ak` | config NFT pair | **yes** — the pair alone |
+| `completed-peg-ins-merkle-tree.ak`, `completed-peg-outs-merkle-tree.ak` | config NFT pair + one-shot outref | partly — the one-shot is out-of-band |
+| `peg-in.ak` | oracle policy, config NFT pair, TM NFT policy | partly — oracle and TM policy are out-of-band |
+| `peg-out.ak` | oracle policy, config NFT pair | partly — the oracle is out-of-band |
+| `treasury.ak` | registry policy, TM NFT policy | no |
+| `spos-registry.ak` | bootstrap outref | no |
+| `spo-bans.ak` | registry hash, fault policy ids, ban tunables, bootstrap outref | no |
+| `fault-verifier-round1/round2/equivocation.ak` | registration script hash | no |
+
+The SPO-side tree and `treasury.ak` are rooted in their own bootstrap outpoints and cross-script
+hashes rather than in the Config, so a client must still be told those identities out of band.
+Closing the gap by mirroring the enforced parameters into the Config datum was considered and
+**dropped** (binocular `38f9e06`): those mirrors existed only to feed an Aiken TM validator's
+config-only oracle read, which became moot once the canonical TM contract moved to Scalus.
+Restoring full discoverability therefore needs a deliberate design pass, not a datum append.
 
 ### Instance lifecycle: retirement and redeploy
 

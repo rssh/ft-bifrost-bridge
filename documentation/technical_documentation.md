@@ -939,6 +939,9 @@ group-signed singleton — the previous revision of this section, unchanged in t
 | 13 | `per_pegout_fee` | Int (satoshi) | the **floor** for the per-peg-out protocol fee. The *effective* fee of each peg-out is pinned in its own `PegOutDatum` at lock time; the TM builder skips any peg-out whose datum fee is below this floor at the batch snapshot slot |
 | 14 | `min_peg_out_fbtc` | Int (satoshi) | minimum fBTC a PegOut request may lock (> `per_pegout_fee` + 330-sat dust); a client-side check at request creation and the TM builder's skip threshold |
 
+| 15 | `leader_reward` | Int (lovelace) | the TM poster's reward, paid by each fBTC mint that claims against the record; **pinned into the TM record datum at post time** — the post-time linkage check validates the pin against this field, the one narrow on-chain read of this UTxO (an SPO-operational tx, cheap to rebuild). *Implementation status*: the TM record datum now carries `epoch`/`leader_reward` (N7, alongside the poster identity + GC timer `creator`/`created`), but the mint-time pin against this Config field and the mint-side payout are not yet enforced on-chain — that lands with N9 |
+| 16 | `schedule` (ScheduleParams) | Int (slots) | the epoch/TM schedule — deadlines, batch grid, recovery window (normative table in *TM batches and the protocol schedule*); **effect from the next epoch boundary**, never mid-epoch |
+
 > **Implementation status (TM builder skips for #13 and #14).** Neither skip is implemented.
 > `heimdall`'s `build_tm` selection filter drops a peg-out for a non-standard destination, a
 > duplicate POR id, a `created` outside the freshness window, an entry already in the
@@ -959,8 +962,7 @@ group-signed singleton — the previous revision of this section, unchanged in t
 > so an attacker who writes a `PegOutDatum` directly can under-pay the protocol fee. It cannot
 > steal: `peg-out.ak` binds the trie value to the datum's own fee, so the payment and the
 > completion still agree.
-| 15 | `leader_reward` | Int (lovelace) | the TM poster's reward, paid by each fBTC mint that claims against the record; **pinned into the TM record datum at post time** — the post-time linkage check validates the pin against this field, the one narrow on-chain read of this UTxO (an SPO-operational tx, cheap to rebuild). *Implementation status*: the TM record datum now carries `epoch`/`leader_reward` (N7, alongside the poster identity + GC timer `creator`/`created`), but the mint-time pin against this Config field and the mint-side payout are not yet enforced on-chain — that lands with N9 |
-| 16 | `schedule` (ScheduleParams) | Int (slots) | the epoch/TM schedule — deadlines, batch grid, recovery window (normative table in *TM batches and the protocol schedule*); **effect from the next epoch boundary**, never mid-epoch |
+
 
 **Update (governed).** The tunables change through an authorized **Config Update** (see the
 Transaction catalog): the Config NFT returns to `config.ak` with the new datum, authorized by

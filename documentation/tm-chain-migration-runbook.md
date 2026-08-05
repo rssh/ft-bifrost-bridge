@@ -225,8 +225,8 @@ In `heimdall.toml` `[cardano]`:
 - `cpo_policy_id` = the completed-peg-outs trie policy id minted in step 3 (the same value
   that becomes Config field 3 in step 6). `reconstruct-cpo-trie` requires it: it is the
   only check that validates the rebuilt trie as a WHOLE, by comparing the reconstructed
-  root against the on-chain CPO singleton. Without it the command warns and writes an
-  unverified trie.
+  root against the on-chain CPO singleton. Without it the command fails at startup and
+  writes nothing.
 
 Deleted keys (remove if present): `[bitcoin] treasury_txid/treasury_vout/
 treasury_amount_sat`, `[cardano] tm_control_ref`.
@@ -244,7 +244,7 @@ heimdall reconstruct-cpo-trie --config heimdall.toml --dry-run
 ```
 
 If `run-mover --once` reports no pending peg-outs while one exists on chain, the address
-is wrong. If `reconstruct-cpo-trie` warns that no `cpo_policy_id` is configured, the key
+is wrong. If `reconstruct-cpo-trie` exits with a missing-`cpo_policy_id` error, the key
 did not load.
 
 **Genesis treasury value.** Before the first post-migration Confirm exists, nothing on

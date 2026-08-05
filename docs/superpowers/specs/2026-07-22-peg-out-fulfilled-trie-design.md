@@ -232,6 +232,12 @@ changes; migration still unexecuted, fold in.
      `btcTxid`s form the confirmed set; chain-order them by the treasury
      linkage (each record's input-0 outpoint == predecessor's
      `btcTxid ‖ 00000000`, from the Config anchor).
+     - An output at the TM address or the peg-out address with NO datum at
+       all MUST be skipped. Every genuine record at either address carries
+       an inline datum, so a bare payment provably is not one. An output
+       whose datum EXISTS but cannot be resolved MUST be a hard error at
+       the TM address, naming the output. It may be an unread Confirmed
+       record, and dropping it would silently omit a movement.
   2. For each confirmed TM, find its `Unconfirmed` datum(s) at the TM
      address (match by recomputed txid of `signedBtcTx`; duplicates
      dedupe by txid). Extract the committed root from the raw bytes and the

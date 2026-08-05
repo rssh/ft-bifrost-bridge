@@ -3,7 +3,7 @@ use aiken/collection/dict
 use aiken/collection/list
 use aiken/crypto
 use aiken/merkle_patricia_forestry as mpf
-use cardano/address.{Address, Script, VerificationKey}
+use cardano/address.{Script}
 use cardano/assets.{AssetName, PolicyId, Value, quantity_of, tokens}
 use cardano/transaction.{InlineDatum, Input, Output, OutputReference}
 
@@ -37,14 +37,6 @@ pub fn get_config_as_data_list(
     ) > 0
   expect InlineDatum(outputDatum) = configRefInput.output.datum
   builtin.unconstr_fields(outputDatum)
-}
-
-pub fn is_signed_by(
-  wallet_address: Address,
-  tx_extra_signatories: List<ByteArray>,
-) {
-  expect VerificationKey(key_hash) = wallet_address.payment_credential
-  list.any(tx_extra_signatories, fn(es) { es == key_hash })
 }
 
 /// Returns the quantity of all tokens with the policyId
@@ -87,52 +79,6 @@ pub fn find_singleton_asset_output_at_script(
   output
 }
 
-/// Returns `True` if `predicate(index, element)` holds for every element of the list.
-/// Returns `False` as soon as any predicate fails.
-pub fn indexed_all(self: List<a>, predicate: fn(Int, a) -> Bool) -> Bool {
-  list.indexed_foldr(
-    self,
-    True,
-    fn(index, element, acc) { predicate(index, element) && acc },
-  )
-}
-
-/// Variant of `indexed_all` that also threads a state through the predicate.
-/// Processes the list from right to left.
-/// Returns `True` iff every predicate call returns `True`.
-/// Does not short-circuit: the predicate is still called for all elements.
-pub fn indexed_all_with_state(
-  self: List<a>,
-  state: s,
-  predicate: fn(Int, a, s) -> (Bool, s),
-) -> Bool {
-  let (finalResult, _finalState) =
-    list.indexed_foldr(
-      self,
-      (True, state),
-      fn(index, element, (acc, state)) {
-        let (result, newState) = predicate(index, element, state)
-        (result && acc, newState)
-      },
-    )
-  finalResult
-}
-
-pub fn indexed_all_with_state_with_return_value(
-  self: List<a>,
-  state: s,
-  predicate: fn(Int, a, s) -> (Bool, s),
-) -> (Bool, s) {
-  list.indexed_foldr(
-    self,
-    (True, state),
-    fn(index, element, (acc, state)) {
-      let (result, newState) = predicate(index, element, state)
-      (result && acc, newState)
-    },
-  )
-}
-
 //Expects the merkle root to be the first field of the InlineDatum
 pub fn get_mpf_from_output(output: Output) -> mpf.MerklePatriciaForestry {
   expect InlineDatum(datum) = output.datum
@@ -141,18 +87,6 @@ pub fn get_mpf_from_output(output: Output) -> mpf.MerklePatriciaForestry {
     |> builtin.head_list
     |> builtin.un_b_data
     |> mpf.from_root
-}
-
-//Insert many successive elements in the merkle tree in one tx
-pub fn mpf_multiple_inserts(
-  initial_merkle_tree: mpf.MerklePatriciaForestry,
-  keys_values_and_inclusion_proofs: List<(ByteArray, ByteArray, mpf.Proof)>,
-) -> mpf.MerklePatriciaForestry {
-  list.foldr(
-    keys_values_and_inclusion_proofs,
-    initial_merkle_tree,
-    fn((key, value, proof), result) { mpf.insert(result, key, value, proof) },
-  )
 }
 
 pub fn bitcoin_hash(bytes: ByteArray) -> ByteArray {

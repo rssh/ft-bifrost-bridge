@@ -53,8 +53,8 @@ config update without changing the token.
 | 4 | `peg_in_withdraw_script_hash` | peg-in completion script (mint delegate) |
 | 5 | `peg_out_withdraw_script_hash` | peg-out completion script (burn delegate) |
 | 6 | `peg_in_close_verifier_script_hash` | dormant (F1–F6) |
-| 7 | `legit_treasury_movement_and_peg_out_produced_verifier_script_hash` | peg-out completion |
-| 8 | `legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash` | dormant (F1–F6) |
+| 7 | `legit_treasury_movement_and_peg_out_produced_verifier_script_hash` | **vestigial** (see the note below) |
+| 8 | `legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash` | **vestigial** (see the note below) |
 | 9 | `min_stake` | Int; off-chain use |
 | 10 | `update_auth` | `Option<AuthorizationMethod>`; None = frozen |
 
@@ -62,6 +62,15 @@ Removed vs the old datum: source-chain/block-header MPF policy+name, treasury
 NFT policy+name, the completed-peg-ins/outs **asset-name** fields (now constants),
 and the short-lived mint-checker field. Everything shifted; do not assume old
 indices.
+
+**Fields 7 and 8 are vestigial since rev 5.1.** This document describes the datum
+as it was when the fSAT migration landed. The rewritten `peg-out.ak` proves
+payment against the quorum-attested completed-peg-outs trie root. It never
+delegates to either verifier. So no rev-5.1 transaction withdraws from field 7 or
+field 8, and neither reward account needs registration. `binocular deploy-bridge`
+still writes both slots because the datum shape kept them; treat the values as
+placeholders. See *Register script reward accounts* in the technical
+documentation.
 
 **Read hashes from the datum, live.** The config UTxO is now spendable by its
 `update_auth` (Update or Retire), so its script hashes can change between

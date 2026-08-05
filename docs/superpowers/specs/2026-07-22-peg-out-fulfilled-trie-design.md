@@ -105,11 +105,19 @@ stateDiagram-v2
   provider — every proof is verified on-chain, so data sources need no
   trust.
 - Genesis edge: before the first Confirmed record exists there is no
-  Cardano-side source for the treasury UTXO's VALUE (heimdall's old
-  bootstrap used bitcoind `gettxout`). The genesis treasury value is
-  operator-supplied configuration alongside the Config anchor; from the
-  first Confirm onward the tip's `fulfilledPegOuts[0]` amount is the
-  compliant current-state source.
+  Cardano-side source for the treasury UTXO's VALUE. Config #11 names the
+  anchor OUTPOINT, not its amount. From the first Confirm onward the tip's
+  treasury output amount is the compliant current-state source, so the gap
+  closes after one movement.
+
+  *Implementation status.* The "SPOs do NOT run Bitcoin nodes" property holds
+  for the peg-out / CPO flow, but NOT for genesis bootstrap. heimdall still
+  prices the anchor with bitcoind `gettxout` and hard-requires
+  `bitcoin.rpc_url` to do it (`blockfrost_chain.rs`, the `confirmed.is_empty()`
+  branch of `query_treasury`); no operator-supplied value key exists. So
+  bitcoind RPC is required until the first TM confirms. Making the value
+  operator-supplied needs a new config key or an amount field on Config #11 —
+  not designed yet.
 
 ### Identifiers and encodings
 
@@ -175,7 +183,7 @@ The Confirm branch, in place of rev 3's marker walk + MPF fold:
 2. Require the CPO singleton (NFT = (field-3 policy, `"CPO"`)) to be SPENT,
    with a continuing output carrying the NFT at the same address.
 3. Scan the parsed outputs for root commitments (spk size 39, prefix
-   `6a2543504f5231`); require EXACTLY ONE; extract `new_root` = spk[7, 32).
+   `6a2543504f5231`); require EXACTLY ONE; extract `new_root` = spk[7, 39).
 4. Require the continuing CPO output's datum root == `new_root`.
 
 `TmConfirmRedeemer` keeps its 4-field shape (no step list). Mint linkage, GC,
@@ -317,7 +325,11 @@ no fulfilled peg-outs under the new scheme); one config Update swapping
 fields 3 (trie policy), 4 (peg-in), 5 (peg-out), with field 11 anchor
 handling as planned. Ordering is load-bearing: the singleton must exist and
 field 3 must point at it before the first Confirm under the new TM script.
-Old CPO instance and old PORs: abandoned as before.
+Old CPO instance: abandoned as before. Old PORs: STRANDED, not merely
+abandoned — the deployed Cancel delegates to a verifier that is a bare
+`fail`, the deployed PegOutDatum has no `created` field, and no shipped
+command builds the old-shape Complete. The migration MUST verify the old
+peg-out address holds no UTxO before the switch; see the runbook, step 4b.
 
 ### Documentation updates (per the traceability rules)
 

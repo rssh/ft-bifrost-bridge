@@ -71,7 +71,8 @@ validator peg_out_validator(
     expect datum: PegOutDatum = input_datum
 
     //POR id: hash of this request's own outpoint — globally unique, needs no
-    //datum field, and is exactly what the TM's "POR" marker committed.
+    //datum field, and is exactly the key the quorum inserted into the
+    //completed-peg-outs trie whose root the TM Confirm attested.
     let por_id = utils.hash_output_ref(peg_out_input.output_reference)
 
     let bridged_tokens_locked = quantity_of(
@@ -106,7 +107,7 @@ validator peg_out_validator(
         )
         //All locked fBTC burnt — completion consumes the request entirely.
         //No trie insert: once-only completion is structural (unique POR id,
-        //single-spend POR UTxO, one marker per paying output).
+        //single-spend POR UTxO, and one trie entry per paid request).
         let all_bridged_tokens_burnt = quantity_of(
           self.mint,
           bridged_token_policy_id,

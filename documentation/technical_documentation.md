@@ -938,6 +938,27 @@ group-signed singleton — the previous revision of this section, unchanged in t
 | 12 | `fee_rate_sat_per_vb` | Int (sat/vB) | the **exact** Bitcoin miner fee rate for deterministic TM construction (`miner fee = vsize × rate`); read off-chain by every SPO's TM builder; the roster tracks the fee market by group-signing updates (see the signing-model note and *Stuck-TM recovery*) |
 | 13 | `per_pegout_fee` | Int (satoshi) | the **floor** for the per-peg-out protocol fee. The *effective* fee of each peg-out is pinned in its own `PegOutDatum` at lock time; the TM builder skips any peg-out whose datum fee is below this floor at the batch snapshot slot |
 | 14 | `min_peg_out_fbtc` | Int (satoshi) | minimum fBTC a PegOut request may lock (> `per_pegout_fee` + 330-sat dust); a client-side check at request creation and the TM builder's skip threshold |
+
+> **Implementation status (TM builder skips for #13 and #14).** Neither skip is implemented.
+> `heimdall`'s `build_tm` selection filter drops a peg-out for a non-standard destination, a
+> duplicate POR id, a `created` outside the freshness window, an entry already in the
+> completed-peg-outs trie, and a net amount below the 330-satoshi dust threshold. It does not
+> compare the datum fee against Config #13, and it does not compare the locked amount against
+> Config #14.
+>
+> *Why not yet.* Both are consensus skip rules, so both operands MUST come from the Config UTxO
+> read at the batch snapshot slot. `heimdall` reads only Config #11 and #15 from that UTxO today.
+> Its `TreasuryUtxo.per_pegout_fee` looks like #13 but is sourced from the node's local
+> `heimdall.toml`, and #14 is not parsed anywhere. Filtering on a node-local value would make the
+> TM bytes depend on per-node configuration, which is exactly what the determinism rule below
+> forbids, and would break FROST signing on any config skew. Implementing these skips therefore
+> means plumbing Config #13 and #14 through the chain reader first.
+>
+> *Consequence until then.* A peg-out whose datum fee is under the floor, or whose locked amount is
+> under `min_peg_out_fbtc`, is still paid. Both are enforced only client-side at request creation,
+> so an attacker who writes a `PegOutDatum` directly can under-pay the protocol fee. It cannot
+> steal: `peg-out.ak` binds the trie value to the datum's own fee, so the payment and the
+> completion still agree.
 | 15 | `leader_reward` | Int (lovelace) | the TM poster's reward, paid by each fBTC mint that claims against the record; **pinned into the TM record datum at post time** — the post-time linkage check validates the pin against this field, the one narrow on-chain read of this UTxO (an SPO-operational tx, cheap to rebuild). *Implementation status*: the TM record datum now carries `epoch`/`leader_reward` (N7, alongside the poster identity + GC timer `creator`/`created`), but the mint-time pin against this Config field and the mint-side payout are not yet enforced on-chain — that lands with N9 |
 | 16 | `schedule` (ScheduleParams) | Int (slots) | the epoch/TM schedule — deadlines, batch grid, recovery window (normative table in *TM batches and the protocol schedule*); **effect from the next epoch boundary**, never mid-epoch |
 
@@ -1105,13 +1126,20 @@ normative on the infrastructure an SPO MUST run to participate.
   provider they choose. Every proof they submit is verified on-chain, so their data source needs
   no trust.
 * **Genesis edge.** Before the first `Confirmed` TM record exists, there is no Cardano-side source
-  for the genesis treasury UTxO's Bitcoin-side VALUE (the pre-rev-5.1 bootstrap read it from
-  `bitcoind gettxout`, a Bitcoin RPC call this design deliberately removes from the peg-out path).
-  The genesis treasury value is therefore **operator-supplied configuration**, recorded alongside
-  the Config anchor (`initial_btc_treasury_utxo`, Config #11) at deployment time. From the first
-  Confirm onward, the chain tip's `fulfilled_peg_outs`-adjacent treasury output (the record's
-  parsed `outputs[0]`) is the compliant current-state source (see the TM chain note under *Post
-  signed TM*).
+  for the genesis treasury UTxO's Bitcoin-side VALUE. Config #11 (`initial_btc_treasury_utxo`)
+  names the anchor OUTPOINT, not its satoshi amount. From the first Confirm onward, the chain
+  tip's treasury output (the record's parsed `outputs[0]`) is the compliant current-state source
+  (see the TM chain note under *Post signed TM*), so this gap closes after one movement.
+
+  > **Implementation status (genesis treasury value).** The no-Bitcoin-node property above holds
+  > for the peg-out and completed-peg-outs flow: no root, proof, or completion needs a Bitcoin-side
+  > query. It does NOT yet hold for genesis bootstrap. `heimdall` resolves the anchor's value by
+  > calling `gettxout` on the outpoint from Config #11, and it hard-requires `bitcoin.rpc_url` to
+  > do so — `query_treasury` returns an error naming that key when no `Confirmed` TM exists yet and
+  > no RPC endpoint is set. There is no configuration key carrying the value instead. So an SPO
+  > MUST have bitcoind RPC reachable until the bridge's first TM confirms; after that the Bitcoin
+  > dependency disappears from steady state. Removing it entirely means either adding a
+  > genesis-value config key or extending Config #11 to carry the amount; neither is designed yet.
 
 ### The Config as the discovery root
 

@@ -1274,7 +1274,7 @@ operator performs:
 
 **Where each identity is fixed (normative).** A validator cannot compute another contract's hash
 while it runs, because it does not hold that contract's code. Every cross-contract identity must
-therefore be supplied to it, and the steps above supply identities in two different homes. Which
+therefore be supplied to it, and the steps above supply identities in three different homes. Which
 home an identity gets is a security decision, not a matter of taste:
 
 * An identity a validator relies on to decide **whether funds move** MUST be a **validator
@@ -1286,11 +1286,23 @@ home an identity gets is a security decision, not a matter of taste:
   peg-in close verifier and the peg-out produced / not-produced verifiers (Config #6–#8) are
   these; note that they are Binocular contracts, so this is also how a Scalus contract's identity
   reaches an Aiken validator.
+* A per-instance key or constant that **the reading validator itself owns** MAY live in **that
+  validator's own datum**, written once at bootstrap and preserved by every later branch.
+  `treasury.ak`'s `y_federation` and `federation_csv_blocks` are these: both are set from the
+  bootstrap mint redeemer, and all three spend branches carry them forward with the record-update
+  spread, so no on-chain path can change them after creation.
 
-The difference is that a datum field holds whatever the `update_auth` authority last wrote. Putting
-a trust anchor there would let governance repoint the bridge's source of Bitcoin truth on a live
-instance; a parameter cannot be repointed at all. Neither kind may be hard-coded as a constant in a
-script body: that makes the compiled artifact instance-specific, so one build could no longer serve
+The three differ in *who* can change the value. A parameter cannot be changed at all, because it is
+part of the hash. A Config field holds whatever the `update_auth` authority last wrote, so putting a
+trust anchor there would let governance repoint the bridge's source of Bitcoin truth on a live
+instance. A validator's own datum field sits between them: immutability is enforced by the
+validator's logic rather than by its hash, which is sound **only** because the validator that
+enforces the preservation is the same one that relies on the value. That is why `y_federation` — the
+key that authorizes a Federation reset and that can sweep the treasury once the CSV elapses — is
+safe there but would not be safe in the Config. It also keeps the value next to the group key it is
+derived with, so a depositor reads one UTxO rather than two, and it lets one compiled `treasury.ak`
+serve instances with different federation keys. None of the three may be hard-coded as a constant
+in a script body: that makes the compiled artifact instance-specific, so one build could no longer serve
 several bridged assets (Config #1), and it breaks the redeploy property recorded under *Instance
 lifecycle: retirement and redeploy*.
 5. **Mint the completed-peg-ins trie NFT** — its UTxO carries the MPF root, initialized to the

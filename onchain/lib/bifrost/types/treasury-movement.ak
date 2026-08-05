@@ -5,7 +5,8 @@
 // Constr tags + field order MUST stay identical to the Scalus `TmDatum` enum:
 //
 //   enum TmDatum {
-//     Unconfirmed(signedBtcTx, creator, created, epoch, leaderReward)                // Constr 0
+//     Unconfirmed(signedBtcTx, creator, created, epoch, leaderReward,
+//                 fulfilledPorOutpoints)                                             // Constr 0
 //     Confirmed(btcTxid, sweptPegInUtxoIds, fulfilledPegOuts, spentViaFederationLeaf,
 //               creator, created, epoch, leaderReward) }                             // Constr 1
 //   case class PegOutEntry(scriptPubKey, amount)                                     // Constr 0
@@ -39,6 +40,11 @@ pub type TreasuryMovementDatum {
     created: Int,
     epoch: Int,
     leader_reward: Int,
+    //DA hint (rev 5.1): Cardano outpoints (36 B = tx hash ++ vout LE) of the
+    //PegOutRequests this TM fulfills. UNVERIFIED on-chain - the FROST-signed
+    //CPOR1 root committed in signed_btc_tx is the integrity anchor; this
+    //field only lets reconstruction skip the search fallback.
+    fulfilled_por_outpoints: List<ByteArray>,
   }
   // Produced by binocular `confirm-tmtx` once the TM is Binocular-confirmed: the recomputed txid,
   // the swept peg-in outpoints (each = 36-byte prev_txid(LE) ++ vout), the fulfilled peg-outs,

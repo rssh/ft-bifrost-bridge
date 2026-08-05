@@ -80,19 +80,12 @@ validator peg_out_validator(
       bridged_token_asset_name,
     )
 
-    let user_authorized = authorize_action(
-      create_auth(
-        datum.owner_auth,
-        self.inputs,
-        self.reference_inputs,
-        self.withdrawals,
-        self.extra_signatories,
-        self.mint,
-      ),
-    )
-
     when redeemer.action_type is {
       CompletePegOut { membership_proof } -> {
+        //Completion is permissionless cleanup: it can only burn the exact
+        //locked fBTC against a value-bound attested payment (the trie root
+        //is quorum-attested at TM Confirm, spec rev 5.1), so authorization
+        //adds nothing. The completer keeps the MIN_ADA as a small incentive.
         //The confirmed TM paid dest exactly (locked − pinned fee) satoshi:
         //the trie maps this POR id to dest_spk ++ amount_le8 (8-byte LE).
         let net_amount = bridged_tokens_locked - datum.per_pegout_fee
@@ -115,13 +108,24 @@ validator peg_out_validator(
           bridged_token_asset_name,
         ) == -bridged_tokens_locked
         and {
-          user_authorized,
           fulfilled_proven,
           all_bridged_tokens_burnt,
         }
       }
       Cancel { exclusion_proof } -> {
-        //Refund path: after the timeout, an id absent from the trie can never
+        //Refund path: only the owner may cancel and reclaim their own
+        //locked fBTC.
+        let user_authorized = authorize_action(
+          create_auth(
+            datum.owner_auth,
+            self.inputs,
+            self.reference_inputs,
+            self.withdrawals,
+            self.extra_signatories,
+            self.mint,
+          ),
+        )
+        //After the timeout, an id absent from the trie can never
         //be paid (the SPO freshness margin stops fulfillment long before the
         //deadline), so the fBTC unlocks back to the owner.
         let timeout_elapsed = interval.is_entirely_after(
@@ -460,13 +464,15 @@ test complete_rejects_partial_burn() fail {
   )
 }
 
-test complete_rejects_not_authorized() fail {
+//Completion is permissionless cleanup (spec rev 5.1): a third party who
+//never signed as the owner can still complete a fulfilled request.
+test complete_by_third_party_succeeds() {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
     t_happy_trie(),
     CompletePegOut { membership_proof: [] },
     assets.from_asset(t_bridged_token_policy, t_bridged_token_asset, -t_locked),
-    [],
+    [#"ee999999999999999999999999999999999999999999999999999999"],
     interval.everything,
   )
 }

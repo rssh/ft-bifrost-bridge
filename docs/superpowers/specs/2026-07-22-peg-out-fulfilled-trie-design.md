@@ -313,3 +313,56 @@ epoch, no bridge redeployment:
   on TM transition, constr-tag checks).
 - heimdall: builder marker-pair determinism, freshness filter boundaries, id
   hashing golden vectors against Aiken's `hash_output_ref`.
+
+## Addendum (2026-08-05, rev 4 proposal — under review): permissionless sweep completion
+
+Motivation: MPF inserts at TM Confirm cost ~43M CPU / ~142K memory each
+(measured), memory-capping a TM at ~110 peg-outs on a near-empty trie. This
+addendum moves the expensive work out of the mandatory confirm path:
+
+- TM Confirm stores the fulfilled entries in the `Confirmed` datum (shape
+  under decision: bare `por_id`s vs `(por_id, dest_spk, amount)` triples); it
+  performs NO trie update.
+- Complete becomes a permissionless, batchable **sweep**: anyone spends one or
+  more fulfilled PORs, matching each against an entry of a referenced
+  Confirmed TM record, burns all locked fBTC, and keeps the MIN_ADA as the
+  cleanup reward.
+- Cancel: `owner_auth` + the 30-day timeout. (Open decision: with or without
+  a CPO exclusion proof — analysis shows the proof is tautological when
+  inserts happen only at POR-spend time, since a swept POR no longer exists
+  to cancel.)
+- New accepted assumption: every paid POR is swept before its cancel
+  deadline (7-day freshness margin + watchtower liveness — the same actors
+  the oracle already requires; binocular sweeps immediately after
+  confirm-tmtx).
+- New GC rule: never GC a Confirmed TM record that still lists unswept
+  entries.
+
+### PegOutRequest state machine
+
+```mermaid
+stateDiagram-v2
+    Open : Open - fBTC + MIN_ADA locked at peg-out.ak
+    Open : datum {owner_auth, dest_spk, per_pegout_fee, created}
+    Paid : Paid (off-chain fact) - a confirmed TM paid dest_spk
+    Paid : and listed this por_id via its POR marker
+    Completed : Completed - all locked fBTC burned
+    Completed : MIN_ADA taken by the sweeper
+    Cancelled : Cancelled - fBTC + MIN_ADA returned to owner
+
+    [*] --> Open : Create PegOut request (user, no on-chain validation)
+    Open --> Paid : TM fulfills and confirms (Bitcoin fact, no Cardano tx)
+    Paid --> Completed : Complete (sweep) by ANYONE, batchable - entry matches datum, burn enforced
+    Open --> Cancelled : Cancel by owner_auth, validity entirely after created + 30 d
+    Paid --> Cancelled : HAZARD - paid but unswept at the deadline (guarded by margin + sweep liveness)
+    Completed --> [*]
+    Cancelled --> [*]
+
+    note right of Paid
+        On-chain the POR UTxO is unchanged - Paid is
+        off-chain knowledge (the Confirmed record lists
+        the por_id). Cancel cannot distinguish Open from
+        Paid. That is why every paid POR must be swept
+        before its cancel deadline.
+    end note
+```

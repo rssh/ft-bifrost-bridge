@@ -8,7 +8,7 @@ Confirm) and the rev 4 addendum (permissionless sweep, no trie — rejected:
 cancel-safety would rest on third-party sweep liveness, and an owner can
 profitably collude with watchtowers to withhold sweeps and split the
 "cancelled" refund). The file name keeps its original working title.
-Status: Draft — pending user approval.
+Status: Approved (2026-08-05); implementation in progress.
 Supersedes on-chain: the pinned-treasury-outpoint peg-out completion/cancel
 scheme (technical_documentation.md §Complete peg-out [CPO-1..10], §Cancel
 PegOut request [CXL-1..6], and the `legit_TM_and_peg_out_produced` /
@@ -98,6 +98,12 @@ stateDiagram-v2
 - Non-SPO users (e.g. building a Cancel exclusion proof) MAY use any
   provider — every proof is verified on-chain, so data sources need no
   trust.
+- Genesis edge: before the first Confirmed record exists there is no
+  Cardano-side source for the treasury UTXO's VALUE (heimdall's old
+  bootstrap used bitcoind `gettxout`). The genesis treasury value is
+  operator-supplied configuration alongside the Config anchor; from the
+  first Confirm onward the tip's `fulfilledPegOuts[0]` amount is the
+  compliant current-state source.
 
 ### Identifiers and encodings
 

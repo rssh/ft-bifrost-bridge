@@ -85,7 +85,12 @@ validator peg_out_validator(
         //Completion is permissionless cleanup: it can only burn the exact
         //locked fBTC against a value-bound attested payment (the trie root
         //is quorum-attested at TM Confirm, spec rev 5.1), so authorization
-        //adds nothing. The completer keeps the MIN_ADA as a small incentive.
+        //adds nothing. Nothing here constrains the POR's non-fBTC content,
+        //so the completer takes it all: the MIN_ADA, plus any overfunded
+        //lovelace or stray tokens a careless creator locked in. Surplus
+        //cannot be routed back on-chain (owner_auth is an
+        //AuthorizationMethod, not an address). Request-creation tooling
+        //MUST NOT overfund PORs — this is a client-side check.
         //The confirmed TM paid dest exactly (locked − pinned fee) satoshi:
         //the trie maps this POR id to dest_spk ++ amount_le8 (8-byte LE).
         let net_amount = bridged_tokens_locked - datum.per_pegout_fee

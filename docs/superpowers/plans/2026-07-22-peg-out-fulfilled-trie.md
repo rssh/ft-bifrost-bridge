@@ -223,7 +223,85 @@ peg-outs. Spec Status already Approved.
 
 ---
 
-### Task 9: Submodule bumps + end-to-end verification
+### Task 10: heimdall — Kupo optional, Blockfrost-API reconstruction backend
+
+**Files:**
+- Modify: `src/cardano/cpo_trie.rs` (history-provider abstraction),
+  `src/cardano/kupo.rs`, `src/cardano/bf_http.rs` / `blockfrost_chain.rs`
+  (history endpoints), `src/config.rs` (kupo endpoint optional), CLI wiring
+  for `reconstruct-cpo-trie`
+- Modify: `documentation/technical_documentation.md` §Infrastructure
+  assumptions (one edit: Kupo optional, Blockfrost-API fallback — mirror the
+  spec's rev 5.2 wording)
+
+**Interfaces:**
+- Produces: one reconstruction interface with two backends — Kupo (existing)
+  and Blockfrost-compatible (`GET /addresses/{addr}/transactions` paginated
+  + `GET /txs/{hash}/utxos` + datum resolution) — selected by config: Kupo
+  endpoint present → Kupo, absent → Blockfrost path. Identical
+  reconstruction semantics (hard-error on gaps, per-TM root assertion,
+  multi-hint trial, fallback matcher, on-chain root cross-check) in BOTH
+  backends — share the algorithm, vary only the fetch layer.
+
+- [ ] Step 1: extract the fetch layer behind a trait (matches with datums,
+  spent+unspent, for an address; resolve outpoint → output+datum); implement
+  the Blockfrost backend over address-tx-history walking.
+- [ ] Step 2: config: `kupo_endpoint` optional; selection logic + log line
+  naming the active backend.
+- [ ] Step 3: tests — backend-shared algorithm tests stay; add a
+  Blockfrost-backend fixture test (mocked HTTP or trait-level fake); full
+  suite green.
+- [ ] Step 4: the one-paragraph tech-doc edit. Commit —
+  `feat(pegout): Blockfrost-API reconstruction backend - Kupo optional`
+
+---
+
+### Task 11: binocular — watchtower POR sweeper (Confirm -> Complete chaining)
+
+**Files:**
+- Modify: `src/main/scala/binocular/cli/commands/ConfirmTmtxCommand.scala`
+  (post-confirm hook), watchtower loop wiring
+- Create/rewrite: peg-out completion builder (replaces the stale
+  `PegOutCompleteCommand` flow) + persistent local trie mirror
+- Modify: `src/main/scala/binocular/watchtower/CompletedPegOutsTrie.scala`
+  (proof building from the mirror), `BridgeConfig` (peg-out script params /
+  sweeper toggle)
+- Test: proof-builder + sweeper-decision tests; tx-shape tests as feasible
+
+**Interfaces:**
+- Produces: after each successful confirm, the watchtower: (1) updates its
+  persistent trie mirror from the confirmed TM's hint outpoints + attested
+  root (hard-verify: mirror root == committed root, else halt sweeping and
+  log — reconstruction needed); (2) for each fulfilled POR still unspent,
+  builds ONE Complete tx: spend the POR with the peg-out spend handler,
+  invoke the peg-out withdraw with
+  `{config_ref_input_index, completed_peg_outs_ref_input_index,
+  CompletePegOut{membership_proof}}`, reference inputs = Config UTxO + CPO
+  singleton, burn all locked fBTC under the bridged-token policy, MIN_ADA +
+  residue to the watchtower wallet; submits them independently (parallel,
+  no contention). Cold-start mirror: reconstruct from chain history via the
+  provider (Confirmed records + spent Unconfirmed datums' hints, root-
+  verified per TM) — Blockfrost-served, no Kupo requirement.
+- Consumes: `peg_out_validator` 2-param blueprint from ft plutus.json (via
+  BifrostContracts), `CompletedPegOutsTrie.trieFrom`, the 4-field
+  PegOutDatum, bridged-token policy from Config fields 0/1.
+
+- [ ] Step 1: persistent trie mirror (state file; update-at-confirm;
+  cold-start reconstruction; root verification gates).
+- [ ] Step 2: Complete tx builder + membership proof from the mirror;
+  emulator/CEK test against the real Aiken peg_out blueprint if feasible,
+  else tx-shape unit tests + document what is compile-only.
+- [ ] Step 3: watchtower chaining — after confirm success, sweep loop with
+  per-POR error isolation (one failed complete must not block the rest),
+  dry-run support, config toggle (default on).
+- [ ] Step 4: full suite + scalafmt + pins; runbook/doc touch: replace the
+  two hedged runbook spots from Task 8 (exact completion command name; note
+  the sweeper automates it). Commit —
+  `feat(watchtower): POR sweeper - chain Complete after Confirm`
+
+---
+
+### Task 9 (runs LAST): Submodule bumps + end-to-end verification
 
 - [ ] Push binocular and heimdall; bump both submodule refs in
   ft-bifrost-bridge; full three-repo verification sweep (`aiken check`,
@@ -233,9 +311,8 @@ peg-outs. Spec Status already Approved.
 
 ### Tracked follow-ups (out of plan scope)
 
-- Rewrite binocular `PegOutCompleteCommand` / `PegOutRequestCommand` against
-  the new peg-out.ak (needs the reconstruction-based proof builder);
-  optional completer bot.
+- `PegOutRequestCommand` refresh (4-field datum) if still stale after
+  Task 11.
 - `BitcoinContract` blueprint pin freshness test (oracle side).
 - Pre-existing peg_in blueprint pin drift — resolve before next deploy.
 - Deferred minors in the SDD ledger.

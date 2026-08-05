@@ -83,12 +83,18 @@ stateDiagram-v2
   query services (e.g. hosted Blockfrost) for consensus-relevant decisions:
   TM building, co-sign root verification, and trie reconstruction read only
   self-hosted infrastructure.
-- Baseline SPO stack: Cardano node + **Dolos** in front (Blockfrost-
-  compatible current-state API + tx submission) + **Kupo** matching the
-  bridge script addresses from the deployment slot with spent AND unspent
-  results and datum resolution — Kupo serves the reconstruction path.
-  Heimdall's provider client MUST stay within the endpoint subset this stack
-  serves (verify against the deployed Dolos/Kupo versions).
+- Baseline PRODUCTION SPO stack: Cardano node + **Dolos** in front
+  (Blockfrost-compatible current-state API + tx submission) + **Kupo**
+  matching the bridge script addresses from the deployment slot with spent
+  AND unspent results and datum resolution — Kupo serves the reconstruction
+  path. Heimdall's provider client MUST stay within the endpoint subset this
+  stack serves (verify against the deployed Dolos/Kupo versions).
+- **Kupo is OPTIONAL** (rev 5.2): reconstruction MUST also work through a
+  plain Blockfrost-compatible API alone (address tx history + per-tx
+  UTxOs/datums), selected automatically when no Kupo endpoint is configured
+  — for test environments, demos, and non-SPO tooling. The self-hosting
+  requirement above applies to production SPO consensus decisions, not to
+  the code's capabilities.
 - SPOs do NOT run Bitcoin nodes. Nothing in the peg-out termination flow
   requires Bitcoin-side queries: committed roots and DA hints live entirely
   in Cardano data. Bitcoin nodes remain a watchtower requirement (deposit
@@ -216,9 +222,11 @@ changes; migration still unexecuted, fold in.
   proposing a wrong root fails quorum. This is what keeps root integrity
   inside the existing quorum-honesty envelope. Reads self-hosted data only
   (§Infrastructure assumptions).
-- **Reconstruction (cold start / recovery / new SPO)** — served entirely by
-  Kupo matches on the TM address and the peg-out address (spent + unspent,
-  with datums); no Bitcoin node, no tx-hash or metadata index:
+- **Reconstruction (cold start / recovery / new SPO)** — served by EITHER
+  backend behind one interface: Kupo matches on the TM address and the
+  peg-out address (spent + unspent, with datums), OR the Blockfrost-
+  compatible history endpoints (address transactions + per-tx UTxOs +
+  datums) when Kupo is not configured. No Bitcoin node either way:
   1. Collect ALL Confirmed datums ever created at the TM address (spent and
      unspent — GC'd records remain readable as spent matches). Their
      `btcTxid`s form the confirmed set; chain-order them by the treasury
@@ -252,10 +260,22 @@ changes; migration still unexecuted, fold in.
   `--peg-out-withdraw-hash`, optional field 11) survive from the rev-3
   implementation unchanged.
 - `create-tmtx` (test scaffold) and any datum builders: 6-field Unconfirmed.
-- Follow-ups (explicitly out of scope of this design's implementation plan,
-  tracked separately): rewriting the stale `PegOutCompleteCommand` /
-  `PegOutRequestCommand` against the new `peg-out.ak` (needs the
-  reconstruction-based proof builder), and an optional completer bot.
+- **POR sweeper (rev 5.2, in scope)**: the watchtower CHAINS completion after
+  confirmation. After a successful `confirm-tmtx`, it takes the confirmed
+  TM's fulfilled POR set (the datum hint, verified against the attested
+  root via its local trie mirror), and for each POR builds and submits a
+  Complete transaction: spend the POR, `CompletePegOut{membership_proof}`
+  via the peg-out withdraw, reference the Config and the CPO singleton,
+  burn the locked fBTC; the watchtower keeps the MIN_ADA (the cleanup
+  incentive realized). One POR per transaction (`peg-out.ak` requires
+  exactly one own-credential input); the trie is a reference input, so
+  completion transactions are independent — no contention, submit in
+  parallel. The watchtower maintains a persistent local trie mirror
+  (updated at each confirm from the hint + committed root; cold start via
+  the reconstruction path above on binocular's provider). This subsumes the
+  previously-parked `PegOutCompleteCommand` rewrite.
+- Remaining follow-up (out of scope): `PegOutRequestCommand` refresh
+  (4-field datum) if still stale after the sweeper work.
 
 ### Trust model (what rev 5 adds, and what it does not)
 

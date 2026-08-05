@@ -1085,9 +1085,15 @@ normative on the infrastructure an SPO MUST run to participate.
 * The baseline SPO stack is a Cardano node with **Dolos** in front of it (a Blockfrost-compatible
   current-state API plus transaction submission) and **Kupo** matching the bridge script
   addresses from the deployment slot, indexing spent AND unspent outputs with datum resolution.
-  Kupo is what serves the reconstruction path (below). Heimdall's provider client MUST stay
-  within the endpoint subset this stack serves — verify against the deployed Dolos/Kupo versions
-  before every upgrade.
+  Kupo is the RECOMMENDED backend for the reconstruction path (below), and production SPOs SHOULD
+  run it. **Kupo is OPTIONAL** (rev 5.2): reconstruction MUST also work through a plain
+  Blockfrost-compatible API alone (address transaction history, per-transaction UTxOs, datum
+  resolution). An implementation MUST select that path automatically when no Kupo endpoint is
+  configured. That path exists for test environments, demos, and non-SPO tooling. It is heavier,
+  because it walks the whole address history instead of querying it. The self-hosting requirement
+  above still governs every production SPO consensus decision; it does not restrict what the code
+  can read. Heimdall's provider client MUST stay within the endpoint subset this stack serves.
+  Verify that subset against the deployed Dolos/Kupo versions before every upgrade.
 * SPOs do NOT run Bitcoin nodes. Nothing in the peg-out termination flow needs a Bitcoin-side
   query: committed roots and the `fulfilled_por_outpoints` data-availability hint both live
   entirely in Cardano data (the TM's own bytes and its `Unconfirmed` datum). Bitcoin nodes remain

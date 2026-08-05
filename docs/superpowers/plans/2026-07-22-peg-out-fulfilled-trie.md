@@ -200,6 +200,14 @@ Spec: `docs/superpowers/specs/2026-07-22-peg-out-fulfilled-trie-design.md`
 
 ### Task 8: Documentation + runbook
 
+USER REQUIREMENT: the technical documentation MUST include the TM chain
+diagram. The working tree already holds an uncommitted TM-chain lifecycle
+mermaid flowchart in `technical_documentation.md` (before §Confirm TM tx) —
+incorporate it (do not clobber, do not duplicate), updated to rev 5.1: the
+Confirm edge also spends the CPO singleton (attested-root copy, [CTM-*]),
+the Unconfirmed datum line gains `fulfilled_por_outpoints`, and the diagram
+commits with the rest of the doc changes.
+
 Per the spec's §Documentation updates: new §Infrastructure assumptions block
 (normative, incl. the genesis treasury-value note); Complete/Cancel catalog
 rewrites with the withdrawn/kept/fresh check IDs ([CPO-3] withdrawn too —

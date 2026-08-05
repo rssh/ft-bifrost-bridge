@@ -70,7 +70,11 @@ after field 4 is swapped the old peg-in withdraw script no longer gates fSAT min
 Peg-outs already **paid** by an old-policy TM (i.e. present in the OLD completed-peg-outs
 trie) should likewise be completed before or shortly after the swap — completion is
 permissionless, so anyone may still do this against the OLD trie and OLD peg-out script
-after the swap, since neither is spent or altered by the migration. Peg-outs that were
+after the swap, since neither is spent or altered by the migration. The watchtower's POR
+sweeper will NOT do these for you: it derives one peg-out script and one trie from the
+CURRENT config, so once field 5 is swapped it only ever sees the new pair. Clear the old
+ones with `binocular peg-out-complete` while the old config values are still live, or
+point a throwaway config at the old hashes afterwards. Peg-outs that were
 never paid become **abandoned**: the new roster's TM builder only ever looks at the new
 peg-out script's UTxOs, so an old, unpaid PegOut request can only be recovered by its
 owner via *Cancel PegOut request* once its `created + 30 days` timeout elapses — the old
@@ -167,10 +171,22 @@ ordering note). Restart the watchtower/confirm daemon after setting it.
    the attested root in the same transaction.
 4. Heimdall's next `query_treasury` reports `treasury = TM chain tip <btc_txid>:0` and
    the next TM posts with redeemer `Chain(0)` referencing the tip record.
-5. Once a TM fulfilling at least one peg-out confirms, verify a third party (not the
-   PegOut's owner) can complete it — `binocular peg-out-complete` (or equivalent)
-   against the new peg-out script, supplying only a membership proof — and that the
-   completer, not the original owner, receives the MIN_ADA.
+5. Once a TM fulfilling at least one peg-out confirms, the watchtower's POR sweeper
+   completes every paid request by itself: `confirm-tmtx` chains a Complete transaction
+   after each Confirm (`bridge.por-sweeper`, on by default). Verify in the confirm log
+   that `sweeper: completed <TX_HASH>#<INDEX>` appears and that the sweeper wallet — not
+   the original owner — received the MIN_ADA. That is the third-party check: the
+   watchtower never holds the PegOut owner's key.
+
+   To drive it by hand instead (or to complete a request the sweeper skipped):
+
+   ```bash
+   binocular peg-out-complete --pegout <TX_HASH>#<INDEX>
+   ```
+
+   Omit `--pegout` to complete every completable request; add `--dry-run` to preview.
+   The command reconstructs the completed-peg-outs trie from chain history, so it needs
+   no local state and works from any machine with the bridge config.
 
 Old TM records and the TMCTRL UTxO are abandoned in place; they are not on the new
 chain and are never read. The old completed-peg-outs singleton and any unpaid old

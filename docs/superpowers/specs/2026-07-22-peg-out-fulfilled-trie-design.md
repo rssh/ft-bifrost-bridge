@@ -110,14 +110,16 @@ stateDiagram-v2
   pinned per-pegout fee). Maintained off-chain by heimdall; the on-chain
   artifact is only the root.
 - **Root commitment output**: an OP_RETURN output with scriptPubKey
-  `OP_RETURN OP_PUSHBYTES_36 ("POR1" ++ new_root)` (38 script bytes,
-  prefix `6a24504f5231`, root = script bytes [6, 38)). EXACTLY ONE such
+  `OP_RETURN OP_PUSHBYTES_37 ("CPOR1" ++ new_root)` (39 script bytes,
+  prefix `6a2543504f5231`, root = script bytes [7, 39)). EXACTLY ONE such
   output MUST be present in every TM, in any position (heimdall emits it
   last). A TM fulfilling zero peg-outs commits the unchanged root.
-  - `"POR1"`, not a `"BFR"` tag: watchtowers detect peg-in deposits by
+  - `"CPOR1"` = CPO Root v1 — reuses the protocol's canonical `CPO`
+    abbreviation, with a version character for future format bumps. Not a
+    `"BFR"`-prefixed tag: watchtowers detect peg-in deposits by
     scanning for `"BFR"`-prefixed OP_RETURNs; a TM pays the treasury address
     in output 0.
-  - 36-byte payload — under every datacarrier standardness limit; constant
+  - 37-byte payload — under every datacarrier standardness limit; constant
     size regardless of batch size (rev 3's per-peg-out markers cost
     ~46 vB each; they are GONE).
 - **TM output layout**: `[0]` = treasury change, `[1..m]` = peg-out payments
@@ -160,8 +162,8 @@ The Confirm branch, in place of rev 3's marker walk + MPF fold:
    field 3 — the CPO trie NFT policy id.
 2. Require the CPO singleton (NFT = (field-3 policy, `"CPO"`)) to be SPENT,
    with a continuing output carrying the NFT at the same address.
-3. Scan the parsed outputs for root commitments (spk size 38, prefix
-   `6a24504f5231`); require EXACTLY ONE; extract `new_root` = spk[6, 32).
+3. Scan the parsed outputs for root commitments (spk size 39, prefix
+   `6a2543504f5231`); require EXACTLY ONE; extract `new_root` = spk[7, 32).
 4. Require the continuing CPO output's datum root == `new_root`.
 
 `TmConfirmRedeemer` keeps its 4-field shape (no step list). Mint linkage, GC,

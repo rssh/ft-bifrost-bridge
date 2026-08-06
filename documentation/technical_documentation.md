@@ -1188,6 +1188,11 @@ reads the datum for the values it needs and derives the remaining script hashes 
 
 Secrets and machine-local settings are out of scope of this rule: signing keys, wallet mnemonics,
 node endpoints and their credentials, and polling intervals configure an *operator*, not a bridge.
+**Reference-script locations are out of scope for the same reason** — a reference-script UTxO is a
+reclaimable convenience, so its outpoint would go stale in the datum the moment someone reclaimed
+it, and any transaction may instead embed the script and pay the size. Whether reference scripts
+should become instance-level, which would change that answer, is owned by *Final optimizations*
+[final-optimizations.md](final-optimizations.md).
 
 <!-- contract-CR: the discovery fields below are specified but not yet in config.ak. -->
 **Not yet reachable (contract-CR).** Seven identities an SPO program needs are absent from the

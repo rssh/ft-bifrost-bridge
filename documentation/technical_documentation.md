@@ -1285,9 +1285,10 @@ home an identity gets is a security decision, not a matter of taste:
   TM NFT policy are the two cases: a different value is a different instance, by construction.
 * An identity that only names **which script performs a delegated check** MAY live in the
   **Config datum**, written at step 4 and changeable afterwards by an authorized Update. The
-  peg-in close verifier and the peg-out produced / not-produced verifiers (Config #6–#8) are
-  these; note that they are Binocular contracts, so this is also how a Scalus contract's identity
-  reaches an Aiken validator.
+  peg-in close verifier (Config #6) is the live example: `peg-in.ak` reads it at run time, and it
+  is a Binocular contract, so this is also how a Scalus contract's identity reaches an Aiken
+  validator. Config #7 and #8 named the peg-out verifiers the same way until rev 5.1 withdrew
+  them; they are retained as vestigial fields for datum-shape stability and are read by nothing.
 * A per-instance key or constant that **the reading validator itself owns** MAY live in **that
   validator's own datum**, written once at bootstrap and preserved by every later branch.
   `treasury.ak`'s `y_federation` and `federation_csv_blocks` are these: both are set from the

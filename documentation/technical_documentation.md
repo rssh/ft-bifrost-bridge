@@ -1689,7 +1689,7 @@ Key path ($Y_{51}$) is the main line: it is how SPOs sweep this UTxO into the ne
 * `D` MUST be the key whose refund leaf is committed in the address — else the refund path is unspendable.
 * `Q_auth` MUST be a key the depositor can BIP-322-sign with — else completion is impossible.
 
-> **Implementation status.** The deployed demo beacon is `"BFR" ‖ Q_auth` (35 bytes) — `D` is conveyed to the sweeping operator out-of-band, acceptable for a federation-run demo but not for permissionless SPO sweeping. The 67-byte dual-key beacon above is the normative target (tooling + `deposit_binding_ok` CR).
+> **Implementation status.** The 67-byte form above is implemented: `bitcoin.ak` parses it (`get_op_return_refund_key` / `get_op_return_xonly`) and `pegin_deposit.py` builds it. The earlier 35-byte demo beacon carried `Q_auth` only, so `D` had to reach the sweeper out of band or be guessed; it is now **refused outright**, not dual-read — accepting it would keep that guessing path alive for exactly the deposits it exists to remove. A deposit made under the old form against an instance deployed before this change cannot be swept by the new `peg_in` validator.
 
 ### Create PegInRequest (Cardano)
 

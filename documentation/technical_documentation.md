@@ -1046,11 +1046,12 @@ input and verify the NFT; off-chain readers resolve the NFT to its UTxO and deco
 datum. Registration and key-rotation transactions **spend** it (their updates must be atomic with
 the state they change).
 
-> **Implementation status.** The implemented `TreasuryDatum` is still `{bifrost_identity_root,
-> current_treasury_address, current_treasury_utxo_id, current_spos_frost_key}`: the two pointer
-> fields are **vestigial** under the TM-chain model (bootstrap-seeded, never advanced, not
-> authoritative — slated for removal in N10b), and `y_federation` / `federation_csv_blocks` are not
-> yet present (also N10b). On-chain **key rotation now exists** (N10a): `treasury.ak`'s spend
+> **Implementation status.** The implemented `TreasuryDatum` matches the table above:
+> `{bifrost_identity_root, current_spos_frost_key, y_federation, federation_csv_blocks,
+> last_reset_tm_txid}`. N10b landed — the vestigial `current_treasury_address` /
+> `current_treasury_utxo_id` pointers are removed (the TM chain is the pointer), and the federation
+> fields plus the reset anti-replay anchor are present. On-chain **key rotation exists** (N10a):
+> `treasury.ak`'s spend
 > redeemer became a sum type, and the new `UpdateY` branch changes `current_spos_frost_key` under a
 > BIP340 signature by the outgoing key, while the `RegistryUpdate` branch now preserves the key
 > itself (the prior writable-yet-pinned contradiction is resolved). The K1 bootstrap is implemented
@@ -1078,7 +1079,7 @@ trust assumptions are exactly these rows — nothing else enters the system.
 | genesis treasury outpoint (`initial_btc_treasury_utxo`) | deployer, **on Bitcoin**, funded and confirmed *before* the Config mint (see the creation flow) | Config #11 | re-pointable by governance Update — which deliberately roots a **new** TM chain, the emergency federation-sweep recovery; outside that case a re-anchor would orphan the existing chain |
 | Operational parameters (initial values) | deployer | Config #9 and #12–16 | authorized Config Update (see §Operational parameters) |
 | TM authorized-minter key (interim) | deployer | TM-control datum (`TMCTRL`) | interim only — retired by the permissionless TM-posting design (see *Post signed TM*) |
-| authorized fault-verifier policies | deployer/governance | fault-proof policy set (mock today — contract-CR, see §9.2) | contract-CR |
+| authorized fault-verifier policies | deployer/governance | the three specialized policies — `fault-verifier-round1.ak`, `fault-verifier-round2.ak`, `fault-verifier-equivocation.ak` (see §9.2) | governance, per the allow-list in `spo-bans.ak` |
 
 ### Continuous inputs during operation
 
@@ -2318,9 +2319,12 @@ complete.
 * **[CLR-4]** **Branch (b) — duplicate**: `peg-in.ak` MUST verify a trie membership proof showing `peg_in_utxo_id` is already in the
   completed-peg-ins trie — fBTC was already minted via another request; this one is redundant.
 
-> **Implementation status.** The implemented `Cancel` action checks `owner_auth` + NFT burn only;
-> the branch gating above is the normative target (part of the unbuilt failure-mode milestone —
-> contract CR).
+> **Implementation status.** The implemented `Cancel` action gates on a withdrawal from the
+> configured peg-in close verifier (Config #6), the PegInRequest NFT being present in the input and
+> burnt, and no bridged token being minted in the same transaction. It does *not* check `owner_auth`
+> — that delegation was replaced by the embedded depositor authorization on the completion path. The
+> per-condition branch gating above is the normative target; today the close verifier is a dummy
+> hash with no reward account, so Cancel is cleanly unsatisfiable until one is deployed.
 
 <!-- G2 (revised 2026-07-15; superseded 2026-07-17): the tunables were moved out of the Config
      into their own singleton, then merged back in when update_auth governance landed. Updates
@@ -2382,8 +2386,8 @@ invalidate in-flight transactions that reference the Config; the cost is bounded
 cadence (see *Operational parameters*).
 
 <!-- G5: new catalog entry — the Update-Y transaction existed only as narrative (epoch phase,
-     DKG finalization step 5, "Key publication"). Requires the key-rotation spend branch in
-     treasury.ak (contract change request; heimdall K2 is gated on it). -->
+     DKG finalization step 5, "Key publication"). The key-rotation spend branch has since landed
+     in treasury.ak (N10a: `UpdateY`, alongside `RegistryUpdate` and `FederationReset`). -->
 ### Update-Y — rotate the treasury group key (Cardano)
 
 **Purpose**: publish the epoch's DKG result — swap `current_spos_frost_key` in the Treasury state

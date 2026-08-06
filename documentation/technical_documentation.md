@@ -1159,9 +1159,10 @@ The deployed tree satisfies this only in part:
 | Contract | Parameters | Config-rooted? |
 |---|---|---|
 | `bridged-token.ak` | config NFT pair | **yes** — the pair alone |
-| `completed-peg-ins-merkle-tree.ak`, `completed-peg-outs-merkle-tree.ak` | config NFT pair + one-shot outref | partly — the one-shot is out-of-band |
+| `completed-peg-ins-merkle-tree.ak` | config NFT pair + one-shot outref | partly — the one-shot is out-of-band |
+| `completed-peg-outs-merkle-tree.ak` | TM NFT policy + one-shot outref | no — since rev 5.1 it is keyed to the TM policy, not the Config |
 | `peg-in.ak` | oracle policy, config NFT pair, TM NFT policy | partly — oracle and TM policy are out-of-band |
-| `peg-out.ak` | oracle policy, config NFT pair | partly — the oracle is out-of-band |
+| `peg-out.ak` | config NFT pair | **yes** — rev 5.1 dropped its oracle parameter; completion now proves against the completed-peg-outs trie |
 | `treasury.ak` | registry policy, TM NFT policy | no |
 | `spos-registry.ak` | bootstrap outref | no |
 | `spo-bans.ak` | registry hash, fault policy ids, ban tunables, bootstrap outref | no |

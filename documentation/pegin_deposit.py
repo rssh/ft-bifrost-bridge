@@ -6,7 +6,7 @@ documentation/bitcoin_tx_construction.md §1. Transaction layout:
 
     in  : your P2WPKH funding UTXO (one, auto-selected via the node)
     out0: peg-in P2TR (value = --amount sat)          # Taproot(Y_fed, refund tapleaf)
-    out1: OP_RETURN "BFR" || depositor_auth_outputkey  # beacon: the depositor's key-path Taproot
+    out1: OP_RETURN "BFR" || D || Q_auth   # 67-byte dual-key beacon: refund key, then auth key
                                                        #   output key = the BIP-322 completion key
     out2: P2WPKH change (omitted if below dust)
 
@@ -173,8 +173,12 @@ def build(wif, amount, fee, auth_output_key=None):
     okey = pegin_outputkey(xonly)
     pegin_spk = b"\x51\x20" + okey
     pegin_addr = segwit_addr(1, okey)
-    # Beacon carries the BIP-322 completion key: the WIF's own key-path Taproot output key by
-    # default, or --auth-output-key to authorize the mint from a DIFFERENT wallet (e.g. UniSat).
+    # The beacon carries BOTH depositor keys, 67 bytes: D then Q_auth.
+    #   D      = `xonly`, the raw internal key committed in the refund leaf above. Carrying it
+    #            means a sweeper READS the refund key instead of guessing it by trying candidate
+    #            outputs against the reconstructed peg-in script.
+    #   Q_auth = the BIP-322 completion key: the WIF's own key-path Taproot output key by default,
+    #            or --auth-output-key to authorize the mint from a DIFFERENT wallet (e.g. UniSat).
     # The refund leaf + funding stay with the WIF; only the mint authorization moves.
     if auth_output_key:
         auth_outputkey = bytes.fromhex(auth_output_key)
@@ -183,7 +187,7 @@ def build(wif, amount, fee, auth_output_key=None):
     else:
         auth_outputkey = taproot_keypath_output_key(xonly)
     auth_addr = segwit_addr(1, auth_outputkey)           # sign the BIP-322 completion from here
-    beacon_spk = b"\x6a\x23\x42\x46\x52" + auth_outputkey
+    beacon_spk = b"\x6a\x43\x42\x46\x52" + xonly + auth_outputkey   # 6a 43 "BFR" D Q_auth
 
     unspents = rpc("scantxoutset", ["start", [f"addr({p2wpkh})"]]).get("unspents", [])
     need = amount + fee

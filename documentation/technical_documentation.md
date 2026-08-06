@@ -2000,6 +2000,8 @@ flowchart TD
   u2 == "spend + recreate, same address" ==> cpo
 ```
 
+### Confirm TM tx (Cardano)
+
 **Purpose**: once the posted TM is confirmed on Bitcoin, transition the TM UTxO from `Unconfirmed` to `Confirmed`. This is where the Binocular proof is checked for the peg-in path; every downstream mint-fBTC reads `Confirmed TM tx` and skips Binocular entirely. This is also where the completed-peg-outs trie advances: the same transaction spends the CPO singleton and recreates it carrying the root this TM's CPOR1 commitment attests (see *the completed-peg-outs trie update* below) — peg-out completion never touches Binocular or the Confirmed TM at all; it only proves membership against that singleton (see *Complete peg-out*). Confirm TM tx does **not** touch `treasury.ak`: key rotation is done in a separate Update-Y transaction after DKG, and the treasury pointer needs **no on-chain register at all** — the Confirmed records form the **TM chain** (see *Post signed TM*), and SPOs derive the current treasury outpoint off-chain as the chain's tip, starting from the Config's genesis outpoint.
 
 **Who**: anyone — typically a watchtower.
@@ -2597,6 +2599,132 @@ unsatisfiable rather than subtly wrong.
   treating that specific rejection as success is a sound substitute.
 * Either certificate form is acceptable: the legacy `stake_registration`, whose deposit is taken from
   the protocol parameters, or Conway's `reg_cert`, which states the deposit explicitly.
+
+<!-- The four SPO-side transactions below were implemented (heimdall `register-spo`,
+     `fault-proof-mint`, `apply-ban`) and described in §SPO Registration and §9, but had no catalog
+     entry: no Structure table and no check inventory, unlike every peg and treasury transaction.
+     Added 2026-08-06 from `spos-registry.ak` and `spo-bans.ak`. -->
+### Register SPO (Cardano)
+
+**Purpose**: enter an SPO into the pool-scoped registration linked-list for the next epoch, binding
+its `pool_id` to the Bifrost identity key it will use for DKG and signing.
+
+**Who**: the SPO, proving control of both keys.
+**Trigger**: an operator wants to participate from the next epoch.
+
+**Structure**
+
+| Role | Content |
+|------|---------|
+| **Inputs** | the registration-list anchor node at `spos-registry.ak`; the Treasury state UTxO (its `bifrost_identity_root` is updated); the SPO's UTxO (fees, deposit) |
+| **Reference inputs** | — |
+| **Mint** | +1 Bifrost Membership Token under `spos-registry.ak`, asset name = `pool_id` |
+| **Outputs** | the updated anchor node; the new registration node carrying `RegistrationNodeData { bifrost_id_pk, bifrost_url }`; the Treasury state UTxO with the new identity root |
+| **Witness data (redeemer)** | `Register { cold_vkey, cold_sig, bifrost_sig, … , bifrost_identity_absence_proof }` |
+| **Validity interval** | unconstrained |
+| **Required signers** | the SPO's payment key (fees); the cold and Bifrost keys authorize through signatures in the redeemer, not as required signers |
+
+**Checks enforced on-chain** (`spos-registry.ak` mint, `Register`)
+
+* **[REG-1]** `spos-registry.ak` MUST verify `pool_id == blake2b_224(cold_vkey)`, and that the minted token's asset name and the new node's key are both that `pool_id`.
+* **[REG-2]** `spos-registry.ak` MUST verify an Ed25519 signature by `cold_vkey` over the registration message — this is what proves the pool actually asked to join.
+* **[REG-3]** `spos-registry.ak` MUST verify a Schnorr signature by the declared `bifrost_id_pk` over `sha2_256(message)` — possession of the Bifrost key, so an operator cannot register a key it does not hold.
+* **[REG-4]** `spos-registry.ak` MUST verify the linked-list insertion is well formed: the anchor's data validates, the node key ordering and prefix rules hold, and the anchor's lovelace is unchanged.
+* **[REG-5]** `spos-registry.ak` MUST verify, against the Treasury state UTxO's `bifrost_identity_root`, an MPF **absence** proof for `bifrost_id_pk` before insertion, and that the continuing root contains the new `bifrost_id_pk → pool_id` binding. This is what makes Bifrost identities globally unique.
+
+**Checks delegated off-chain**
+
+* The registrant MUST publish a `bifrost_url` its peers can reach; nothing on-chain can verify it.
+* Stake is **not** checked here — registration is stake-blind. The `min_stake` filter (Config #9) is applied off-chain at each epoch's candidate enumeration, so an under-staked registrant simply never enters a candidate set.
+
+### Deregister SPO (Cardano)
+
+**Purpose**: remove an SPO from the registration list and release its Bifrost identity binding.
+
+**Who**: the SPO, proving control of its cold key.
+**Trigger**: the operator is leaving, or is rotating to a different Bifrost identity key.
+
+**Structure**
+
+| Role | Content |
+|------|---------|
+| **Inputs** | the SPO's registration node; the registration-list anchor; the Treasury state UTxO |
+| **Mint** | −1 Bifrost Membership Token (`pool_id`) |
+| **Outputs** | the updated anchor node with the entry unlinked; the Treasury state UTxO with `bifrost_id_pk` removed from the identity root |
+| **Witness data (redeemer)** | `Deregister { cold_vkey, cold_sig, … , bifrost_identity_removal_proof }` |
+| **Validity interval** | unconstrained |
+
+**Checks enforced on-chain** (`spos-registry.ak` mint, `Deregister`)
+
+* **[DRG-1]** `spos-registry.ak` MUST verify `pool_id == blake2b_224(cold_vkey)` and that exactly −1 of that asset name is burnt.
+* **[DRG-2]** `spos-registry.ak` MUST verify an Ed25519 signature by `cold_vkey` over the deregistration message.
+* **[DRG-3]** `spos-registry.ak` MUST verify the linked-list removal is well formed and the anchor's lovelace is unchanged.
+* **[DRG-4]** `spos-registry.ak` MUST verify an MPF **removal** proof against the Treasury state UTxO's `bifrost_identity_root`, so the freed `bifrost_id_pk` can be registered again later.
+
+**Checks delegated off-chain**
+
+* Deregistering mid-epoch does not retract a roster already frozen for that epoch; the operator remains liable for its DKG and signing duties until the next boundary.
+
+### Publish fault proof (Cardano)
+
+**Purpose**: establish a direct SPO fault on-chain and mint the singleton `FaultProof` token that records it.
+
+**Who**: anyone holding the evidence — submission is permissionless, the evidence is the authorization.
+**Trigger**: an SPO published an invalid DKG Round 1 or Round 2 payload, or equivocated.
+
+**Structure**
+
+| Role | Content |
+|------|---------|
+| **Inputs** | a claimant UTxO (fees) |
+| **Reference inputs** | the accused pool's registration node at `spos-registry.ak`, located by the redeemer's index — it supplies the authoritative `bifrost_id_pk` |
+| **Mint** | +1 `FaultProof` token under the verifier policy for that fault type; asset name = `blake2b_256(pool_id ‖ evidence_hash)` |
+| **Outputs** | the token, plus optional metadata for off-chain indexers — not trusted by consensus |
+| **Witness data (redeemer)** | `PublishProof { evidence }`, whose shape depends on the fault type |
+| **Validity interval** | unconstrained |
+
+**Checks enforced on-chain** (`fault-verifier-round1.ak`, `fault-verifier-round2.ak`, `fault-verifier-equivocation.ak`)
+
+* **[FLT-1]** The verifier MUST read `bifrost_id_pk` from the accused pool's registration reference input, keyed by `accused_pool_id`. Binding the key to the pool this way is what stops a fault being forged with an attacker's own key under a victim's `pool_id`.
+* **[FLT-2]** The verifier MUST verify the evidence under that key: for equivocation, a BIP340 signature over **each** of the two payloads; for Round 1 and Round 2, the payload signature plus the Halo2 proof for the invalidity claim.
+* **[FLT-3]** For equivocation, the verifier MUST verify the two payloads share a DKG namespace and are not byte-identical — two different statements for the same round is the fault.
+* **[FLT-4]** The verifier MUST verify `evidence_hash`. For equivocation it recomputes it from both payloads (see §9.2) and requires equality; for Round 1 it is derived from the payload; for Round 2 it is read from the signed entry.
+* **[FLT-5]** The verifier MUST verify exactly one token is minted under its own policy, named `blake2b_256(accused_pool_id ‖ evidence_hash)`, with a 28-byte `pool_id` and a 32-byte `evidence_hash`.
+
+**Checks delegated off-chain**
+
+* Nothing gates *who* submits. A false claim cannot mint, because the evidence is verified on-chain; the only cost of a failed attempt is the claimant's fee.
+
+### Apply ban (Cardano)
+
+**Purpose**: consume a `FaultProof` token and record the ban against the accused pool in the ban linked-list.
+
+**Who**: anyone — the token is the authorization.
+**Trigger**: a `FaultProof` token exists for a fault not yet punished.
+
+**Structure**
+
+| Role | Content |
+|------|---------|
+| **Inputs** | the input holding the `FaultProof` token; the ban-list anchor, and the pool's existing ban node if it has one; a submitter UTxO (fees) |
+| **Reference inputs** | — |
+| **Mint** | −1 `FaultProof` token (burnt, so it can never be reused); on a first ban, +1 ban node token `ban/ ‖ pool_id` |
+| **Outputs** | the updated anchor, and the inserted or updated ban node |
+| **Witness data (redeemer)** | the ban withdrawal redeemer carrying `accused_pool_id` and `evidence_hash` |
+| **Validity interval** | finite — the ban expiry is computed from the upper bound |
+| **Required signers** | submitter (fees) — permissionless |
+
+**Checks enforced on-chain** (`spo-bans.ak` withdraw)
+
+* **[BAN-1]** `spo-bans.ak` MUST verify the consumed `FaultProof` token was minted by a policy in its `fault_proof_policy_ids` allow-list. It never re-verifies the raw evidence and never trusts a metadata datum.
+* **[BAN-2]** `spo-bans.ak` MUST verify exactly one token of that policy is burnt, and that its name equals `blake2b_256(accused_pool_id ‖ evidence_hash)` recomputed from the redeemer — which is what binds the ban to the specific fault.
+* **[BAN-3]** `spo-bans.ak` MUST verify `evidence_hash` is not already in the node's `evidence_hashes`, so one fault cannot be punished twice.
+* **[BAN-4]** `spo-bans.ak` MUST verify the ban node transition: `ban_counter` incremented, `ban_until_time` extended by the schedule for that count, `permanent` set once the count passes the configured maximum, and `evidence_hash` appended.
+* **[BAN-5]** `spo-bans.ak` MUST verify the linked-list insert or update is well formed and the anchor's lovelace is unchanged.
+
+**Checks delegated off-chain**
+
+* A banned pool's exclusion from the candidate set is applied at epoch boundaries by the off-chain enumeration reading the ban list; no validator enforces participation.
 
 ## Guaranteeing censor-resistant peg-ins and peg-outs
 

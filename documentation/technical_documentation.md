@@ -856,7 +856,7 @@ them** — each is an off-chain consensus anchor, a pinned-copy source, or a ski
 | 3 | `completed_peg_outs_merkle_tree_policy_id` | PolicyId | completed-peg-outs trie singleton (NFT asset `"CPO"`). **v2 semantics (rev 5.1, 2026-08-05)**: the trie is written ONLY at TM Confirm, which copies the FROST-attested CPOR1 root; *Complete peg-out* and *Cancel PegOut request* reference it (membership / non-membership proof), never spend it. The field NAME is unchanged from v1; the migration Update swaps only the VALUE, to the rewritten validator's policy id (see the migration runbook) |
 | 4 | `peg_in_withdraw_script_hash` | ByteArray (script hash) | peg-in spend logic (withdraw-script pattern) |
 | 5 | `peg_out_withdraw_script_hash` | ByteArray (script hash) | peg-out spend logic (withdraw-script pattern) |
-| 6 | `peg_in_close_verifier_script_hash` | ByteArray (script hash) | peg-in close verifier — dormant until the F1–F6 milestone; a dummy hash has no reward account, so Cancel is cleanly unsatisfiable |
+| 6 | `peg_in_close_verifier_script_hash` | ByteArray (script hash) | peg-in close verifier — the `Cancel` branch is implemented and reads this field; a deployment that does not offer close sets a dummy hash, which has no reward account, so Cancel is cleanly unsatisfiable |
 | 7 | `legit_treasury_movement_and_peg_out_produced_verifier_script_hash` | ByteArray (script hash) | **Vestigial (withdrawn, rev 5.1).** Named the old peg-out completion verifier; `peg-out.ak::CompletePegOut` no longer reads this field — completion is a value-bound membership proof against the completed-peg-outs trie (see *Complete peg-out*). Retained only for datum-shape stability (append-only evolution; see §Config UTxO governance) |
 | 8 | `legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash` | ByteArray (script hash) | **Vestigial (withdrawn, rev 5.1).** Named the old peg-out cancel verifier; `peg-out.ak::Cancel` no longer reads this field — cancel is a timeout plus a non-membership proof against the completed-peg-outs trie (see *Cancel PegOut request*). Retained only for datum-shape stability |
 | 9 | `min_stake` | Int (lovelace) | off-chain only — heimdall's registration gate is its consumer; no on-chain reader |
@@ -895,7 +895,8 @@ reader trusts a datum only if the UTxO's value contains the NFT.
   decode `ConfigDatum`. Since the Config is never spent, the read is stable forever.
 
 > **Implementation status.** The table above is the deployed `config.ak` datum (#0–16), and
-> `min_stake` (#9) is authoritative there. `config.ak` carries a real `spend` handler: the Config
+> `min_stake` (#9) is authoritative there. It is not closed: the discovery fields required by *The
+> Config as the discovery root* are a pending contract-CR and will append after #16. `config.ak` carries a real `spend` handler: the Config
 > is not immutable, it is governed — see *Config UTxO governance*. The peg-in close verifier field
 > is mirrored as `pegInCloseVerifierScriptHash` in the binocular Scalus types — the Aiken name
 > above is normative.
@@ -1045,11 +1046,12 @@ input and verify the NFT; off-chain readers resolve the NFT to its UTxO and deco
 datum. Registration and key-rotation transactions **spend** it (their updates must be atomic with
 the state they change).
 
-> **Implementation status.** The implemented `TreasuryDatum` is still `{bifrost_identity_root,
-> current_treasury_address, current_treasury_utxo_id, current_spos_frost_key}`: the two pointer
-> fields are **vestigial** under the TM-chain model (bootstrap-seeded, never advanced, not
-> authoritative — slated for removal in N10b), and `y_federation` / `federation_csv_blocks` are not
-> yet present (also N10b). On-chain **key rotation now exists** (N10a): `treasury.ak`'s spend
+> **Implementation status.** The implemented `TreasuryDatum` matches the table above:
+> `{bifrost_identity_root, current_spos_frost_key, y_federation, federation_csv_blocks,
+> last_reset_tm_txid}`. N10b landed — the vestigial `current_treasury_address` /
+> `current_treasury_utxo_id` pointers are removed (the TM chain is the pointer), and the federation
+> fields plus the reset anti-replay anchor are present. On-chain **key rotation exists** (N10a):
+> `treasury.ak`'s spend
 > redeemer became a sum type, and the new `UpdateY` branch changes `current_spos_frost_key` under a
 > BIP340 signature by the outgoing key, while the `RegistryUpdate` branch now preserves the key
 > itself (the prior writable-yet-pinned contradiction is resolved). The K1 bootstrap is implemented
@@ -1077,7 +1079,7 @@ trust assumptions are exactly these rows — nothing else enters the system.
 | genesis treasury outpoint (`initial_btc_treasury_utxo`) | deployer, **on Bitcoin**, funded and confirmed *before* the Config mint (see the creation flow) | Config #11 | re-pointable by governance Update — which deliberately roots a **new** TM chain, the emergency federation-sweep recovery; outside that case a re-anchor would orphan the existing chain |
 | Operational parameters (initial values) | deployer | Config #9 and #12–16 | authorized Config Update (see §Operational parameters) |
 | TM authorized-minter key (interim) | deployer | TM-control datum (`TMCTRL`) | interim only — retired by the permissionless TM-posting design (see *Post signed TM*) |
-| authorized fault-verifier policies | deployer/governance | fault-proof policy set (mock today — contract-CR, see §9.2) | contract-CR |
+| authorized fault-verifier policies | deployer/governance | the three specialized policies — `fault-verifier-round1.ak`, `fault-verifier-round2.ak`, `fault-verifier-equivocation.ak` (see §9.2) | governance, per the allow-list in `spo-bans.ak` |
 
 ### Continuous inputs during operation
 
@@ -1157,9 +1159,10 @@ The deployed tree satisfies this only in part:
 | Contract | Parameters | Config-rooted? |
 |---|---|---|
 | `bridged-token.ak` | config NFT pair | **yes** — the pair alone |
-| `completed-peg-ins-merkle-tree.ak`, `completed-peg-outs-merkle-tree.ak` | config NFT pair + one-shot outref | partly — the one-shot is out-of-band |
+| `completed-peg-ins-merkle-tree.ak` | config NFT pair + one-shot outref | partly — the one-shot is out-of-band |
+| `completed-peg-outs-merkle-tree.ak` | TM NFT policy + one-shot outref | no — since rev 5.1 it is keyed to the TM policy, not the Config |
 | `peg-in.ak` | oracle policy, config NFT pair, TM NFT policy | partly — oracle and TM policy are out-of-band |
-| `peg-out.ak` | oracle policy, config NFT pair | partly — the oracle is out-of-band |
+| `peg-out.ak` | config NFT pair | **yes** — rev 5.1 dropped its oracle parameter; completion now proves against the completed-peg-outs trie |
 | `treasury.ak` | registry policy, TM NFT policy | no |
 | `spos-registry.ak` | bootstrap outref | no |
 | `spo-bans.ak` | registry hash, fault policy ids, ban tunables, bootstrap outref | no |
@@ -1169,8 +1172,41 @@ The SPO-side tree and `treasury.ak` are rooted in their own bootstrap outpoints 
 hashes rather than in the Config, so a client must still be told those identities out of band.
 Closing the gap by mirroring the enforced parameters into the Config datum was considered and
 **dropped** (binocular `38f9e06`): those mirrors existed only to feed an Aiken TM validator's
-config-only oracle read, which became moot once the canonical TM contract moved to Scalus.
-Restoring full discoverability therefore needs a deliberate design pass, not a datum append.
+config-only oracle read, which became moot once the canonical TM contract moved to Scalus. What
+replaces them is not a bare mirror: an identity is appended to the datum so that a client can find
+it, while enforcement stays where the rule above puts it. The next two subsections state that
+requirement and list what is still missing.
+
+**The config NFT policy id is the only value an operator is given (normative).** Everything else an
+off-chain component needs MUST be reachable from it, and a value that is not reachable is a defect
+in the datum rather than a field to add to that component's configuration file. The bootstrap needs
+nothing further: the policy id is also the Config script's own hash, because the mint policy and the
+spend script share it, which yields the Config address; the Config NFT is a one-shot, so exactly one
+token exists under that policy for the instance's life, and the single UTxO at that address carrying
+it is the Config. Its asset name is *read from that UTxO*, never configured. From there a component
+reads the datum for the values it needs and derives the remaining script hashes from the blueprints.
+
+Secrets and machine-local settings are out of scope of this rule: signing keys, wallet mnemonics,
+node endpoints and their credentials, and polling intervals configure an *operator*, not a bridge.
+
+<!-- contract-CR: the discovery fields below are specified but not yet in config.ak. -->
+**Not yet reachable (contract-CR).** Seven identities an SPO program needs are absent from the
+datum today and are still handed to operators out of band: the oracle policy id, the TM NFT policy,
+the registry policy and its bootstrap outpoint, the ban-list identity, the authorized
+fault-verifier policies, and the Treasury state NFT identity. Each MUST become a Config-resident
+discovery field.
+
+For the two that are trust anchors — the oracle policy and the TM NFT policy — the Config field is
+a **copy for discovery only**. Enforcement stays on the validator parameter, per *Where each
+identity is fixed* in the creation flow, so the copy adds no governance power over fund safety. It
+is self-verifying rather than trusted: a client derives the reading validator's address from the
+copied value plus the blueprint, then checks that the instance's UTxOs are actually at that
+address. A copy that disagrees with the deployed instance is detected on first use.
+
+Recording the registry and ban-list identities here also settles whether the SPO tree is
+per-instance. The Config names the registry *this* bridge uses. Two instances may record the same
+registry policy id and so share one roster and one ban list, or record different ones and keep them
+separate. That becomes a deployment choice, and neither option needs a new mechanism.
 
 ### Instance lifecycle: retirement and redeploy
 
@@ -1193,9 +1229,19 @@ silently converts "retire and redeploy" into "funds require the federation escap
 
 In-place repair is deliberately NOT offered for trust-anchor failures: a deep reorg can leave
 bridged tokens circulating whose backing peg-ins no longer exist on Bitcoin, and no re-wiring of
-a live instance can restore that invariant. What holders of a retired instance's bridged tokens
-are owed at migration (successor-side swap vs. burn-and-reissue against audited backing) is an
-**open protocol question**, out of scope of this section.
+a live instance can restore that invariant.
+
+**No holder migration is specified for Bitcoin mainnet (decision, 2026-08-04).** The event that
+destroys backing is a reorg deeper than the header oracle's maturation depth — 100 confirmations
+by default, roughly 17 hours of Bitcoin. That is a testnet and regtest phenomenon; the deepest
+mainnet reorg on record is 53 blocks, in 2010, from the value-overflow bug. Instance replacement
+for this reason is therefore not expected on mainnet, and what an unbacked holder would be owed is
+deliberately left unspecified rather than answered.
+
+Retirement for any *other* reason — a contract defect, a compromised oracle owner key — is a
+different case and not covered by that decision. There the Bitcoin treasury is intact, so the
+successor is funded from it and holders are made whole; that is a deployment procedure rather than
+a protocol rule, and it is out of scope here.
 
 ## Bridge instance creation flow
 
@@ -1227,6 +1273,41 @@ operator performs:
    instance**: a different Config UTxO implies a different fBTC policy, i.e. a *new*,
    non-fungible bridge instance. See §Config UTxO for the datum layout (wiring vs parameters) and
    the governance update path.
+
+**Where each identity is fixed (normative).** A validator cannot compute another contract's hash
+while it runs, because it does not hold that contract's code. Every cross-contract identity must
+therefore be supplied to it, and the steps above supply identities in three different homes. Which
+home an identity gets is a security decision, not a matter of taste:
+
+* An identity a validator relies on to decide **whether funds move** MUST be a **validator
+  parameter**. It is applied at step 3, becomes part of the reading validator's own hash, and
+  therefore cannot be changed for the life of the instance. The oracle policy id (step 1) and the
+  TM NFT policy are the two cases: a different value is a different instance, by construction.
+* An identity that only names **which script performs a delegated check** MAY live in the
+  **Config datum**, written at step 4 and changeable afterwards by an authorized Update. The
+  peg-in close verifier (Config #6) is the live example: `peg-in.ak` reads it at run time, and it
+  is a Binocular contract, so this is also how a Scalus contract's identity reaches an Aiken
+  validator. Config #7 and #8 named the peg-out verifiers the same way until rev 5.1 withdrew
+  them; they are retained as vestigial fields for datum-shape stability and are read by nothing.
+* A per-instance key or constant that **the reading validator itself owns** MAY live in **that
+  validator's own datum**, written once at bootstrap and preserved by every later branch.
+  `treasury.ak`'s `y_federation` and `federation_csv_blocks` are these: both are set from the
+  bootstrap mint redeemer, and all three spend branches carry them forward with the record-update
+  spread, so no on-chain path can change them after creation.
+
+The three differ in *who* can change the value. A parameter cannot be changed at all, because it is
+part of the hash. A Config field holds whatever the `update_auth` authority last wrote, so putting a
+trust anchor there would let governance repoint the bridge's source of Bitcoin truth on a live
+instance. A validator's own datum field sits between them: immutability is enforced by the
+validator's logic rather than by its hash, which is sound **only** because the validator that
+enforces the preservation is the same one that relies on the value. That is why `y_federation` — the
+key that authorizes a Federation reset and that can sweep the treasury once the CSV elapses — is
+safe there but would not be safe in the Config. It also keeps the value next to the group key it is
+derived with, so a depositor reads one UTxO rather than two, and it lets one compiled `treasury.ak`
+serve instances with different federation keys. None of the three may be hard-coded as a constant
+in a script body: that makes the compiled artifact instance-specific, so one build could no longer serve
+several bridged assets (Config #1), and it breaks the redeploy property recorded under *Instance
+lifecycle: retirement and redeploy*.
 5. **Mint the completed-peg-ins trie NFT** — its UTxO carries the MPF root, initialized to the
    empty root (32 zero bytes).
 6. **Mint the completed-peg-outs trie NFT** — likewise with the empty root.
@@ -2240,9 +2321,12 @@ complete.
 * **[CLR-4]** **Branch (b) — duplicate**: `peg-in.ak` MUST verify a trie membership proof showing `peg_in_utxo_id` is already in the
   completed-peg-ins trie — fBTC was already minted via another request; this one is redundant.
 
-> **Implementation status.** The implemented `Cancel` action checks `owner_auth` + NFT burn only;
-> the branch gating above is the normative target (part of the unbuilt failure-mode milestone —
-> contract CR).
+> **Implementation status.** The implemented `Cancel` action gates on a withdrawal from the
+> configured peg-in close verifier (Config #6), the PegInRequest NFT being present in the input and
+> burnt, and no bridged token being minted in the same transaction. It does *not* check `owner_auth`
+> — that delegation was replaced by the embedded depositor authorization on the completion path. The
+> per-condition branch gating above is the normative target; today the close verifier is a dummy
+> hash with no reward account, so Cancel is cleanly unsatisfiable until one is deployed.
 
 <!-- G2 (revised 2026-07-15; superseded 2026-07-17): the tunables were moved out of the Config
      into their own singleton, then merged back in when update_auth governance landed. Updates
@@ -2304,8 +2388,8 @@ invalidate in-flight transactions that reference the Config; the cost is bounded
 cadence (see *Operational parameters*).
 
 <!-- G5: new catalog entry — the Update-Y transaction existed only as narrative (epoch phase,
-     DKG finalization step 5, "Key publication"). Requires the key-rotation spend branch in
-     treasury.ak (contract change request; heimdall K2 is gated on it). -->
+     DKG finalization step 5, "Key publication"). The key-rotation spend branch has since landed
+     in treasury.ak (N10a: `UpdateY`, alongside `RegistryUpdate` and `FederationReset`). -->
 ### Update-Y — rotate the treasury group key (Cardano)
 
 **Purpose**: publish the epoch's DKG result — swap `current_spos_frost_key` in the Treasury state

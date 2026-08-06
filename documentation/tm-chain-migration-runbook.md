@@ -13,6 +13,18 @@ the old one); and one config `Update` transaction rewires the deployed Config UT
 Operator prerequisites: the binocular sponsor wallet (funds + the `oracle.owner-pkh`
 `update_auth` key), bitcoind (testnet4) RPC, Blockfrost preprod access.
 
+> **Rev 5.3 (2026-08-05): the TM script hash moved again.** `TreasuryMovementValidator`
+> gained an explicit spend redeemer (`Confirm(proof)` | `Gc`) and extended its GC rule to
+> `Unconfirmed` records, so its compiled UPLC — and therefore its hash — changed. This
+> migration has NOT been executed yet, so this is a rebuild, not a redeploy: run step 1
+> and step 2 against the CURRENT binocular build and use the hashes they print. In
+> particular `peg-in.ak`'s `tm_nft_policy_id` parameter and the completed-peg-outs trie
+> validator's `tm_nft_policy_id` parameter both take the new TM hash, so the peg-in
+> script hash, the trie policy id, and the trie's fresh singleton all follow from it. Any
+> hash written down from an earlier dry run is stale. Binocular's pinned blueprint was
+> refreshed in the same change (`sbt blueprintPin`), so `binocular tm-script` prints the
+> deployable script.
+
 ## 0. Plan the outage window
 
 **Steps 3 through 8 are an outage for the confirm daemon and the watchtower.** Plan them
@@ -24,7 +36,7 @@ names the old one. From that point until step 8 restarts the daemons with matchi
 - `confirm-tmtx` cannot confirm any TM. Confirm spends and recreates the CPO singleton
   named by Config field 3, so it fails from step 3 until step 6's Update lands, and keeps
   failing until step 8 restarts it against the new one-shot ref.
-- The watchtower's POR sweeper completes nothing. It derives one peg-out script and one
+- The watchtower's sweeper completes no peg-out. It derives one peg-out script and one
   trie from the current config, so during the window it sees an inconsistent pair.
 - Unconfirmed TMs accumulate on Cardano. They confirm normally once the window closes.
 - The Bitcoin relay keeps running; nothing here touches the oracle.
@@ -289,24 +301,60 @@ the window.
    the attested root in the same transaction.
 4. Heimdall's next `query_treasury` reports `treasury = TM chain tip <btc_txid>:0` and
    the next TM posts with redeemer `Chain(0)` referencing the tip record.
-5. Once a TM fulfilling at least one peg-out confirms, the watchtower's POR sweeper
-   completes every paid request by itself: `confirm-tmtx` chains a Complete transaction
-   after each Confirm (`bridge.por-sweeper`, on by default). Verify in the confirm log
-   that `sweeper: completed <TX_HASH>#<INDEX>` appears and that the sweeper wallet — not
-   the original owner — received the MIN_ADA. That is the third-party check: the
+5. Once a TM fulfilling at least one peg-out confirms, the watchtower's sweeper completes
+   every paid request by itself: `confirm-tmtx` chains a Complete transaction after each
+   Confirm (`bridge.sweeper.peg-outs`, on by default). Verify in the confirm log that
+   `sweeper[peg-outs]: reclaimed <TX_HASH>#<INDEX>` appears and that the sweeper wallet —
+   not the original owner — received the MIN_ADA. That is the third-party check: the
    watchtower never holds the PegOut owner's key.
 
    To drive it by hand instead (or to complete a request the sweeper skipped):
 
    ```bash
-   binocular peg-out-complete --pegout <TX_HASH>#<INDEX>
+   binocular sweep --source peg-outs --only <TX_HASH>#<INDEX>
    ```
 
-   Omit `--pegout` to complete every completable request; add `--dry-run` to preview.
-   The command reconstructs the completed-peg-outs trie from chain history, so it needs
-   no local state and works from any machine with the bridge config.
+   Omit `--only` to complete every completable request; add `--dry-run` to preview.
+   `binocular peg-out-complete --pegout <TX_HASH>#<INDEX>` is an alias for the same
+   thing. The command reconstructs the completed-peg-outs trie from chain history, so it
+   needs no local state and works from any machine with the bridge config.
+
+## 10. Operating the sweeper after the migration
+
+One sweeper, two sources, both on by default. It runs on the watchtower's idle tick and
+right after every Confirm.
+
+| Source | Reclaims | Toggle |
+|--------|----------|--------|
+| `peg-outs` | PAID PegOutRequests: burns the locked fBTC against a trie membership proof, keeps the MIN_ADA | `bridge.sweeper.peg-outs` |
+| `tm-records` | This wallet's own TM records, `Confirmed` and `Unconfirmed` alike, 30 days after `created`: burns the TM NFT, reclaims the min-ADA | `bridge.sweeper.tm-records` |
+
+The legacy `bridge.por-sweeper` key still works and is ANDed with `bridge.sweeper.peg-outs`.
+It never disables `tm-records`.
+
+**The sources fail independently.** A completed-peg-outs mirror that cannot be reconciled
+with the on-chain root halts `peg-outs` and pages you; `tm-records` keeps running, because
+it never reads the trie. The log line names the source: `sweeper[peg-outs]: HALTING, ...`.
+A halt clears on restart, so fix the state directory (or let reconstruction run) and
+restart the daemon.
+
+**The tip rule.** `tm-records` never GCs the TM chain TIP. It reads the TM address and
+treats a `Confirmed` record whose treasury output (`btc_txid ‖ vout 0`) no other TM record
+spends as the tip, reports it, and leaves it. Burning the tip leaves the next TM with no
+predecessor to reference, and `Genesis` no longer applies once the anchor outpoint is
+spent — recovery would be a governance Update re-anchoring `initial_btc_treasury_utxo`.
+
+Only override it when you have decided to re-anchor:
+
+```bash
+binocular sweep --source tm-records --dry-run            # see what is GC-able
+binocular sweep --source tm-records --force-tip --dry-run # see what the override adds
+binocular sweep --source tm-records --force-tip           # then do it
+```
 
 Old TM records and the TMCTRL UTxO are abandoned in place; they are not on the new
-chain and are never read. The old completed-peg-outs singleton is abandoned with them.
+chain and are never read. They are NOT GC-able by this sweeper either: they sit at the
+OLD TM address, and `tm-records` only reads the address derived from the current config.
+The old completed-peg-outs singleton is abandoned with them.
 Any PegOut request still at the old peg-out address is STRANDED, not merely abandoned:
 nothing can complete or cancel it. Step 4b is the check that keeps this from happening.

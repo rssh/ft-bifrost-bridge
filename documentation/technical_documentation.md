@@ -611,7 +611,8 @@ one by the Confirm transition:
   ignores unbound fields of the mirror TYPE, not extra fields in the data), so a shorter "prefix"
   mirror decodes fine in unit tests but crashes on the real datum on-chain.
 - `creator` — the poster's payment key hash. It authorizes the post-grace **garbage collection**
-  of a `Confirmed` record (burn the TM NFT, reclaim min-ADA; see *Treasury Movement lifecycle*).
+  of the record, `Confirmed` or `Unconfirmed` alike (burn the TM NFT, reclaim min-ADA; one grace
+  period for both variants — see *Garbage collection (grace-period reclaim)*).
 - `created` — POSIX ms, pinned by the TM mint policy to equal the posting tx's validity upper
   bound, so it is a guaranteed upper bound on real posting time (the GC grace period can start late
   but never early).
@@ -647,7 +648,10 @@ TM chain itself (each record references its predecessor).
   Scalus `TreasuryMovementValidator`; its script hash is the TM NFT policy. Posted as
   `Unconfirmed` (raw signed Bitcoin transaction), rewritten to `Confirmed` by binocular's
   `confirm-tmtx` once oracle-proven; peg-in completion then references the `Confirmed` record
-  instead of re-proving the TM inline.
+  instead of re-proving the TM inline. A record of EITHER variant is reclaimable by its `creator`
+  30 days after `created`: the spend burns the TM NFT and returns the min-ADA. An `Unconfirmed`
+  record that never confirms is therefore a 30-day cost, not a permanent one. See
+  *Garbage collection (grace-period reclaim)*.
 * **FaultProof** – evidence-bound fault record; the token is consumed when the ban list applies
   the ban.
 
@@ -1994,14 +1998,16 @@ flowchart TD
   u2["Unconfirmed TM #2"]
   c2["Confirmed TM #2<br/>btc_txid₂ — chain tip"]
   gc(("TM NFT burned,<br/>min-ADA reclaimed"))
-  stale["Unconfirmed fork<br/>(inert forever — can never confirm)"]
+  stale["Unconfirmed fork<br/>(can never confirm)"]
   cpo[("CPO singleton<br/>root: attested per TM")]
 
   cfg -. "Post signed TM, Genesis(i) [PTM-5]<br/>reference input; TM #1 input 0 = the anchor outpoint" .-> u1
   u1 -- "Confirm TM tx [CTM-1..5,9..13]<br/>Binocular-confirmed on Bitcoin, copies the CPOR1-attested root" --> c1
   c1 -. "Post signed TM, Chain(i) [PTM-5]<br/>reference input; TM #2 input 0 = (btc_txid₁, 0)" .-> u2
   u2 -- "Confirm TM tx" --> c2
-  c1 -- "GC by creator after created + 30 d [CTM-6..8]<br/>never the chain tip" --> gc
+  c1 -- "GC by creator after created + 30 d [CTM-6..8,17]<br/>never the chain tip" --> gc
+  u1 -- "GC by creator after created + 30 d [CTM-16]<br/>same rule, same period" --> gc
+  stale -- "GC by creator after created + 30 d [CTM-16]" --> gc
   c1 -. "second Chain post from (btc_txid₁, 0)<br/>after TM #2 confirmed" .-> stale
   c2 -. "governance Config Update MAY re-anchor #11<br/>to the tip (roots a new chain — the Update spends the Config)" .-> cfg
   u1 == "spend + recreate, same address [CTM-10,11]" ==> cpo
@@ -2035,13 +2041,16 @@ flowchart LR
 | **Reference inputs** | Binocular Oracle — supplies the confirmed-chain root; Config UTxO — supplies the CPO trie policy id (field 3) |
 | **Mint** | — (the TM NFT is carried over to the Confirmed output) |
 | **Outputs** | `Confirmed TM tx` UTxO @ `TreasuryMovementValidator` — datum = `Confirmed { btc_txid, swept_peg_in_utxo_ids, fulfilled_peg_outs: [{scriptPubKey, amount}], creator, created }` – `creator`/`created` carried verbatim from the Unconfirmed input (they drive the GC path); ordering comes from the chain, so no sequence fields. Plus: the CPO trie singleton, recreated at its own address with the CPOR1-attested root |
-| **Witness data (redeemer)** | Merkle proof of `btc_txid` in a BTC block header; Binocular inclusion proof of that block header (the raw BTC tx itself is read from the consumed `Unconfirmed` datum, not duplicated). No trie proof of any kind — the root is copied, not folded |
+| **Witness data (redeemer)** | `TmSpendRedeemer::Confirm(proof)`, where `proof` carries the Merkle proof of `btc_txid` in a BTC block header and the Binocular inclusion proof of that block header (the raw BTC tx itself is read from the consumed `Unconfirmed` datum, not duplicated). No trie proof of any kind — the root is copied, not folded |
 | **Validity interval** | unconstrained |
 | **Required signers** | prover (fee spend) — permissionless |
 | **Size (est.)** | ~9 KB at 100+100: redeemer ~1 KB (two proofs at ~500–600 B each); `Confirmed` output datum ~7 KB (100 swept peg-ins + 100 fulfilled peg-outs). **Primary constraint is exec-unit memory** for parsing the raw BTC tx on-chain, not byte size. The CPO singleton spend/recreate is O(1) regardless of batch size — no MPF proof, no per-peg-out fold. Fee ≈ 0.7 ADA. |
 
 **Checks enforced on-chain** (the `TreasuryMovementValidator` spend branch, `Unconfirmed → Confirmed`)
 
+* **[CTM-14]** `TreasuryMovementValidator` MUST decode the spend redeemer as a `TmSpendRedeemer` — `Confirm(proof)` or `Gc` — before it dispatches on the datum variant.
+* **[CTM-15]** `TreasuryMovementValidator` MUST reject a `Confirm` redeemer on a `Confirmed` record. A `Confirmed` record has no forward transition; only [CTM-6..8,17] can spend it.
+* **[CTM-17]** `TreasuryMovementValidator` MUST verify the transaction has EXACTLY ONE input at its own script address. This holds on the Confirm path and on the GC path alike. The TM NFT has an empty asset name and no one-shot seed, so `(policy, "")` is fungible across posts; spending two TM records in one transaction runs the validator once per input, each invocation accepts the single continuing output (Confirm) or the single burn (GC), and ledger value conservation then forces the second token out to an attacker output carrying a fabricated `Confirmed` datum — which `peg-in.ak` authenticates by NFT, not by address.
 * **[CTM-1]** `TreasuryMovementValidator` MUST verify `btc_txid == sha256d(strip_witness(Unconfirmed.signed_btc_tx))` — the Bitcoin txid is double-SHA256 over the **witness-stripped** serialization; the stored TM is witness-complete, so the validator strips witnesses before hashing (this is what makes the txid match the one committed in Bitcoin block Merkle trees; cf. the B1 note under *Complete peg-in*).
 * **[CTM-2]** `TreasuryMovementValidator` MUST verify `btc_txid` is Merkle-included in the supplied block header.
 * **[CTM-3]** `TreasuryMovementValidator` MUST verify that block header is in Binocular's confirmed-chain root.
@@ -2081,23 +2090,40 @@ flowchart LR
 > completion, which does read the `Confirmed` record.
 
 <!-- G17ii (records permanent, no GC) superseded 2026-07-20: grace-period GC by the creator. -->
-**Garbage collection (grace-period reclaim).** A `Confirmed` record is spendable by its
-**creator** once its grace period elapses:
+<!-- Confirmed-only GC superseded 2026-08-05 (rev 5.3): the same rule now covers Unconfirmed. -->
+**Garbage collection (grace-period reclaim).** A TM record of EITHER datum variant is spendable by
+its **creator** with the `Gc` redeemer once its grace period elapses:
 
-* **[CTM-6]** `TreasuryMovementValidator` MUST verify the GC spend burns the TM NFT.
+* **[CTM-6]** `TreasuryMovementValidator` MUST verify the GC spend burns the TM NFT — `mint` of exactly `-1` under its own policy.
 * **[CTM-7]** `TreasuryMovementValidator` MUST verify the GC spend carries the creator's signature.
-* **[CTM-8]** `TreasuryMovementValidator` MUST verify the GC spend's validity interval lies entirely after `created + 30 days`.
+* **[CTM-8]** `TreasuryMovementValidator` MUST verify the GC spend's validity interval lies entirely after `created + 30 days`. A validity range that only partly clears the boundary MUST fail.
+* **[CTM-16]** `TreasuryMovementValidator` MUST apply [CTM-6], [CTM-7], [CTM-8] and [CTM-17] to an `Unconfirmed` record spent with the `Gc` redeemer, with the SAME grace period it applies to a `Confirmed` one.
 
-By then every swept
-peg-in / fulfilled peg-out is expected to be completed, so the record is no longer needed as
-proof material; the creator reclaims the min-ADA. `created` cannot be backdated (it must equal the
-mint tx's validity upper bound), so the grace period is real. **Operational rule**: the creator MUST NOT GC the chain-TIP
-record — the next TM's `Chain` mint references it (and `Genesis` no longer applies once the
-anchor outpoint is spent). While the bridge is active a successor lands well within the grace
-period; after a >30-day quiet spell, recovery is a config Update re-anchoring
-`initial_btc_treasury_utxo` to the current treasury outpoint. A stale `Unconfirmed` record — a
-dead fork, a superseded fee-bump loser — still remains inert forever; its min-ADA is the cost of
-posting.
+[CTM-6..8] and [CTM-17] are the whole rule. A GC transaction therefore needs no oracle reference
+input, no Config reference input, and no completed-peg-outs trie input.
+
+**Why one grace period for both variants.** A `Confirmed` record is proof material: by 30 days every
+peg-in it swept and every peg-out it fulfilled is expected to be completed, so nothing reads it any
+more. An `Unconfirmed` record whose Bitcoin transaction will never mine — a dead fork, a superseded
+fee-bump loser, a TM whose treasury outpoint a competing transaction spent first — is a dead post
+that nothing third-party ever read. A shorter timer for the `Unconfirmed` case would be safe on
+those grounds, and it was considered and rejected: two timers are two rules to audit and two
+migration constants to keep in step, for dust-sized value. One rule, one number.
+
+**Why a GC transaction can never touch the CPO trie.** `completed-peg-outs-merkle-tree.ak` gates its
+spend on a TM-NFT input with a tag-0 datum PLUS a TM-NFT output with a tag-1 datum. GC burns the NFT
+and produces no TM output at all, so that gate cannot be satisfied in the same transaction.
+
+`created` cannot be backdated (it must equal the mint tx's validity upper bound), so the grace
+period is real.
+
+**Operational rule** (not enforced on-chain): the creator MUST NOT GC the chain-TIP `Confirmed`
+record — the next TM's `Chain` mint references it (and `Genesis` no longer applies once the anchor
+outpoint is spent). While the bridge is active a successor lands well within the grace period;
+after a >30-day quiet spell, recovery is a config Update re-anchoring `initial_btc_treasury_utxo`
+to the current treasury outpoint. Binocular's sweeper enforces the rule off-chain: it treats a
+`Confirmed` record whose treasury output no other record spends as the tip and refuses to GC it
+without an explicit override (see *The sweeper*).
 
 ### Complete peg-in / mint fBTC (Cardano)
 
@@ -4370,6 +4396,17 @@ Beyond maintaining general Bitcoin state, watchtowers perform specialized duties
 * Peg-out completion (burning the locked fBTC) is **permissionless** — it carries no `owner_auth` check and anyone may perform it, watchtower or not (see *Complete peg-out*). Watchtowers' role in a peg-out ends at relaying the signed TM; the withdrawer is paid on Bitcoin as soon as the TM confirms, with no Cardano-side completion required for the payout.
 * Completion supplies a `por_id` (computed from the PegOut UTxO's own outpoint) and an MPF membership proof that the completed-peg-outs trie maps it to the expected `dest_spk ‖ amount_le8` — no raw TM, no Binocular proof. The validator burns the locked fBTC; the completer keeps the MIN_ADA (the cleanup incentive).
 * Peg-in completion (minting fBTC) is performed by the depositor directly, not by watchtowers — the depositor must provide their Bitcoin x-only public key and a Schnorr signature to authorize minting to their chosen Cardano address (see **bridged-token.ak**).
+
+**The sweeper**
+
+Peg-out completion and TM-record GC are the same job: reclaim the min-ADA of on-chain state that has finished its purpose. Binocular runs both from ONE sweeper with two pluggable sources, on its own idle tick and immediately after every TM Confirm.
+
+* Source `peg-outs` — complete every PAID PegOutRequest. It keeps a local mirror of the completed-peg-outs trie, catches that mirror up to the on-chain CPO singleton's root using the data-availability hints recorded at each Confirm, and reconstructs from chain history when the hints cannot explain that root.
+* Source `tm-records` — GC this wallet's own TM records, `Confirmed` and `Unconfirmed` alike, once `created + 30 days` has passed. It reads only the TM address: no oracle, no Config, no trie.
+* The two sources fail INDEPENDENTLY. A trie mirror that cannot be reconciled with the on-chain root halts `peg-outs` and pages the operator; `tm-records` keeps running, because it never reads the trie. Coupling them would leave TM records locked because of a peg-out problem.
+* Toggles: `bridge.sweeper.peg-outs` and `bridge.sweeper.tm-records`, both on by default. The legacy `bridge.por-sweeper` is ANDed with the first, so a deployment that turned sweeping off keeps that behaviour.
+* **Tip rule.** `tm-records` never GCs the chain TIP: a `Confirmed` record whose treasury output (`btc_txid ‖ vout 0`) no other TM record spends is reported and skipped. Burning it leaves the next TM with no predecessor to reference. `binocular sweep --force-tip` overrides the rule, for an operator who has decided to re-anchor `initial_btc_treasury_utxo` by a governance Update.
+* One-shot form: `binocular sweep [--dry-run] [--source peg-outs|tm-records] [--only TX_HASH#INDEX] [--force-tip]`. `binocular peg-out-complete` is an alias for `sweep --source peg-outs`.
 
 **Anomaly Detection**
 

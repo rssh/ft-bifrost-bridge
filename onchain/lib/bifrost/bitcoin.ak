@@ -238,20 +238,38 @@ pub fn get_op_return_pkh(raw_tx: ByteArray) -> ByteArray {
   bytearray.take(bytearray.drop(script, 5), 28)
 }
 
-// Parse the 32-byte BIP340 x-only depositor pubkey from the OP_RETURN output
-// (always vout 1). scriptpubkey format: 6a 23 "BFR" (424652) <32-byte-xonly>,
-// i.e. OP_RETURN + a 35-byte push of "BFR" ++ the depositor x-only key. This is
-// the `user_source_chain_pub_key` the peg-in commits to on Bitcoin; the peg_in
-// mint handler binds the PegInDatum to it so only that key can complete the peg-in.
-// (Mirrors binocular PegInProofBundle's "6a23424652" prefix + 64-hex xonly.)
-pub fn get_op_return_xonly(raw_tx: ByteArray) -> ByteArray {
+// The dual-key beacon payload from the OP_RETURN output (always vout 1):
+// scriptpubkey format 6a 43 "BFR" (424652) <32-byte D> <32-byte Q_auth>, i.e.
+// OP_RETURN + a 67-byte push of "BFR" ++ the depositor refund key ++ the
+// depositor authorization key. Returns the 64-byte D ‖ Q_auth tail.
+//
+// The single-key 35-byte form (push 0x23, "BFR" ++ Q_auth only) is NOT accepted.
+// It carried no D, which forced off-chain sweepers to RECOVER the refund key by
+// trying candidate outputs against the reconstructed peg-in script — a search
+// that is ambiguous whenever more than one output reconstructs. Carrying both
+// keys explicitly removes the search, and makes an internal-key/output-key
+// mix-up detectable here rather than at completion.
+fn beacon_payload(raw_tx: ByteArray) -> ByteArray {
   let script = get_vout_scriptpubkey(raw_tx, 1)
-  // Validate: byte 0 = 0x6a (OP_RETURN), byte 1 = 0x23 (push 35), bytes 2-4 = "BFR".
+  // Validate: byte 0 = 0x6a (OP_RETURN), byte 1 = 0x43 (push 67), bytes 2-4 = "BFR".
   expect bytearray.at(script, 0) == 0x6a
-  expect bytearray.at(script, 1) == 0x23
+  expect bytearray.at(script, 1) == 0x43
   expect bytearray.take(bytearray.drop(script, 2), 3) == #"424652"
-  // Skip 5 bytes (0x6a + length + "BFR"), take the 32-byte x-only key.
-  bytearray.take(bytearray.drop(script, 5), 32)
+  // Skip 5 bytes (0x6a + length + "BFR"); the rest is D ‖ Q_auth.
+  bytearray.drop(script, 5)
+}
+
+// The depositor's REFUND key D — the key whose refund leaf is committed in the
+// deposit's Taproot tree. Read, never reconstructed.
+pub fn get_op_return_refund_key(raw_tx: ByteArray) -> ByteArray {
+  bytearray.take(beacon_payload(raw_tx), 32)
+}
+
+// The depositor's AUTHORIZATION key Q_auth — the `user_source_chain_pub_key`
+// the peg-in commits to on Bitcoin, and the key BIP-322 signs with. The peg_in
+// mint handler binds the PegInDatum to it so only that key can complete the peg-in.
+pub fn get_op_return_xonly(raw_tx: ByteArray) -> ByteArray {
+  bytearray.take(bytearray.drop(beacon_payload(raw_tx), 32), 32)
 }
 
 // ── Peg-in deposit binding ──────────────────────────────────────────────────────
@@ -303,7 +321,7 @@ pub fn deposit_binding_ok(
 // A hand-built non-witness peg-in deposit tx: vout 0 = P2TR (0x5120…) worth 100000 sat,
 // vout 1 = BFR OP_RETURN (6a 23 "BFR" ‖ 32B) committing the depositor x-only key (0xcc…).
 const sample_deposit_tx: ByteArray =
-  #"020000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff02a086010000000000225120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0000000000000000256a23424652cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000"
+  #"020000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff02a086010000000000225120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0000000000000000456a43424652ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000"
 
 const sample_xonly: ByteArray =
   #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -326,6 +344,37 @@ test deposit_binding_accepts_real_deposit() {
 
 // #1: an outpoint whose txid is NOT this deposit tx (e.g. the treasury input, or any foreign tx) is
 // rejected — the txid prefix must equal the proven deposit's txid.
+// The retired single-key beacon: 6a 23 "BFR" ‖ Q_auth, no D. Kept only to prove it is refused.
+const legacy_deposit_tx: ByteArray =
+  #"020000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff02a086010000000000225120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0000000000000000256a23424652cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000"
+
+const sample_refund_key: ByteArray =
+  #"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+// D is READ from the beacon, never recovered by trying candidate outputs.
+test beacon_exposes_the_refund_key() {
+  get_op_return_refund_key(sample_deposit_tx) == sample_refund_key
+}
+
+// …and the auth key is the SECOND of the two, not the first.
+test beacon_exposes_the_auth_key() {
+  get_op_return_xonly(sample_deposit_tx) == sample_xonly
+}
+
+// A 35-byte beacon is refused outright: the push opcode is 0x23, not 0x43, so
+// beacon_payload's `expect` fails and the whole script errors. Deposits made in
+// the old format are therefore unsweepable by design — see WI-037.
+test deposit_binding_rejects_legacy_beacon() fail {
+  let txid = sha2_256(sha2_256(legacy_deposit_tx))
+  deposit_binding_ok(
+    legacy_deposit_tx,
+    txid,
+    bytearray.concat(txid, #"00000000"),
+    100000,
+    sample_xonly,
+  )
+}
+
 test deposit_binding_rejects_foreign_outpoint() {
   let txid = sha2_256(sha2_256(sample_deposit_tx))
   let foreign = bytearray.concat(#"1111111111111111111111111111111111111111111111111111111111111111", #"00000000")

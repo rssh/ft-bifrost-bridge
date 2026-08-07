@@ -5,7 +5,8 @@ use aiken/merkle_patricia_forestry as mpf
 use aiken/primitive/bytearray
 use bifrost/authorizer.{authorize_action, create_auth}
 use bifrost/constants
-use bifrost/types/config.{ConfigDatum, ScheduleParams}
+use bifrost/types/bridge_state.{BridgeState}
+use bifrost/types/config.{ScheduleParams}
 use bifrost/types/general.{CardanoSignature}
 use bifrost/types/peg_out.{
   Cancel, CompletePegOut, PegOutActionType, PegOutDatum, PegOutWithdrawRedeemer,
@@ -38,30 +39,33 @@ validator peg_out_validator(
       config_nft_policy_id,
       config_nft_asset_name,
     )
-    let bridged_token_policy_id = config.get_bridged_token_policy_id(
+    let bridged_token_policy_id = config.get_bridged_token_policy(
       config_fields,
     )
-    let bridged_token_asset_name = config.get_bridged_token_asset_name(
-      config_fields,
-    )
-    let completed_peg_outs_policy_id = config.get_completed_peg_outs_merkle_tree_policy_id(
-      config_fields,
-    )
+    //spec [CFG-1]: the asset name is a protocol constant, not a Config field
+    let bridged_token_asset_name = constants.bridged_token_asset_name
+    let bridge_state_policy = config.get_bridge_state_policy(config_fields)
 
-    //The completed-peg-outs trie is a REFERENCE input (never spent here):
-    //authenticated by its NFT, it pins the current root — a stale root is
-    //impossible (a spent trie outpoint cannot be referenced).
-    let trie_ref_input = utils.safe_list_at(
+    //spec [CPO-13]: the bridge state singleton is a REFERENCE input (never
+    //spent here), authenticated by its NFT. It pins the current cpo_root – a
+    //stale root is impossible (a spent singleton outpoint cannot be
+    //referenced).
+    let singleton_ref_input = utils.safe_list_at(
       self.reference_inputs,
       redeemer.completed_peg_outs_ref_input_index,
     )
     expect
       quantity_of(
-        trie_ref_input.output.value,
-        completed_peg_outs_policy_id,
-        constants.completed_peg_outs_root_asset_name,
+        singleton_ref_input.output.value,
+        bridge_state_policy,
+        constants.bridge_state_asset_name,
       ) == 1
-    let completed_peg_outs = utils.get_mpf_from_output(trie_ref_input.output)
+    //spec [LIB-1]: decode the singleton datum as BridgeState and read
+    //cpo_root BY NAME. spec [LIB-2]: never utils.get_mpf_from_output here –
+    //a blind field-0 read would return spi_root.
+    expect InlineDatum(state_raw) = singleton_ref_input.output.datum
+    expect state: BridgeState = state_raw
+    let completed_peg_outs = mpf.from_root(state.cpo_root)
 
     expect [peg_out_input] = list.filter(
       self.inputs,
@@ -202,9 +206,11 @@ const t_peg_out_script_hash: ByteArray =
 const t_bridged_token_policy: ByteArray =
   #"aa111111111111111111111111111111111111111111111111111111"
 
-const t_bridged_token_asset: ByteArray = "fSAT"
+//spec [CFG-1]: the same protocol constant the validator reads, never a
+//literal copy of it
+const t_bridged_token_asset: ByteArray = constants.bridged_token_asset_name
 
-const t_completed_peg_outs_policy: ByteArray =
+const t_bridge_state_policy: ByteArray =
   #"bb222222222222222222222222222222222222222222222222222222"
 
 const t_owner_hash: ByteArray =
@@ -216,32 +222,17 @@ const t_dest_spk: ByteArray = #"0014abababababababababababababababababab"
 //relative to it + peg_out_cancel_timeout_ms.
 const t_created: Int = 1_700_000_000_000
 
-//A locally-scoped mirror of `CompletedPegOutsMerkleTreeDatum` (Task 1): its
-//only requirement, per `utils.get_mpf_from_output`, is that the root is the
-//first field of the inline datum.
-type TrieDatum {
-  root: ByteArray,
-}
-
-fn t_config_datum() -> ConfigDatum {
-  ConfigDatum {
-    bridged_token_policy_id: t_bridged_token_policy,
-    bridged_token_asset_name: t_bridged_token_asset,
-    completed_peg_ins_merkle_tree_policy_id: #"aa22",
-    completed_peg_outs_merkle_tree_policy_id: t_completed_peg_outs_policy,
-    peg_in_withdraw_script_hash: #"aa44",
-    peg_out_withdraw_script_hash: t_peg_out_script_hash,
-    peg_in_close_verifier_script_hash: #"aa66",
-    legit_treasury_movement_and_peg_out_produced_verifier_script_hash: #"aa77",
-    legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash: #"aa88",
-    min_stake: 0,
-    update_auth: Some(CardanoSignature { hash: #"aadd" }),
-    initial_btc_treasury_utxo: #"aaee",
-    fee_rate_sat_per_vb: 1,
-    per_pegout_fee: 1000,
-    min_peg_out_fbtc: 10000,
-    leader_reward: 2_000_000,
-    schedule: ScheduleParams {
+//The rev-5.4 seven-field Config datum (spec §Config datum), built as raw
+//Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
+//3 bridge_state_policy, 4 peg_in_script_hash, 5 peg_out_script_hash,
+//6 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
+//Raw on purpose: readers use positional getters and never cast to
+//ConfigDatum, so the fixture mirrors the wire encoding a deployed reader
+//sees, and it stays valid across a future datum shape evolution.
+fn t_config_datum_data() -> Data {
+  let update_auth_data: Data = Some(CardanoSignature { hash: #"aadd" })
+  let schedule_data: Data =
+    ScheduleParams {
       dkg_r1_deadline: 3600,
       dkg_r2_deadline: 7200,
       update_y_deadline: 10800,
@@ -252,15 +243,29 @@ fn t_config_datum() -> ConfigDatum {
       tm_recovery_window: 129600,
       final_tm_cutoff: 345600,
       stability_window: 129600,
-    },
-    spo_bans_policy_id: #"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    base_ban_duration_ms: 600_000,
-    max_faults_before_permanent: 3,
-    max_validity_window_ms: 3_600_000,
-    spos_registry_policy_id: #"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    treasury_info_policy_id: #"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    treasury_info_asset_name: "TMTx",
-  }
+    }
+  let params_data: Data =
+    builtin.constr_data(
+      0,
+      [
+        builtin.i_data(1),
+        builtin.i_data(1000),
+        builtin.i_data(10000),
+        schedule_data,
+      ],
+    )
+  builtin.constr_data(
+    0,
+    [
+      update_auth_data,
+      builtin.b_data(t_bridged_token_policy),
+      builtin.b_data(#"aa222222222222222222222222222222222222222222222222222222"),
+      builtin.b_data(t_bridge_state_policy),
+      builtin.b_data(#"aa444444444444444444444444444444444444444444444444444444"),
+      builtin.b_data(t_peg_out_script_hash),
+      params_data,
+    ],
+  )
 }
 
 fn t_config_ref_input() -> Input {
@@ -276,21 +281,28 @@ fn t_config_ref_input() -> Input {
       },
       value: assets.from_lovelace(2_000_000)
         |> assets.add(t_config_policy, t_config_asset, 1),
-      datum: InlineDatum(t_config_datum()),
+      datum: InlineDatum(t_config_datum_data()),
       reference_script: None,
     },
   }
 }
 
-//The completed-peg-outs trie reference input, carrying the CPO NFT (unless
-//`with_nft` is False, used by the missing-NFT test) and the given root.
-fn t_trie_ref_input(root: ByteArray, with_nft: Bool) -> Input {
+//The bridge state singleton as a REFERENCE input: authenticated by the NFT
+//(bridge_state_policy, "BSS") -- unless `with_nft` is False, used by the
+//missing-NFT test -- and carrying the full 4-field BridgeState datum.
+//spec [CPO-13]: Complete and Cancel read state.cpo_root, decoded as
+//BridgeState and accessed by name per [LIB-1].
+fn t_bridge_state_ref_input(
+  spi_root: ByteArray,
+  cpo_root: ByteArray,
+  with_nft: Bool,
+) -> Input {
   let base = assets.from_lovelace(2_000_000)
   let value = if with_nft {
     base
       |> assets.add(
-          t_completed_peg_outs_policy,
-          constants.completed_peg_outs_root_asset_name,
+          t_bridge_state_policy,
+          constants.bridge_state_asset_name,
           1,
         )
   } else {
@@ -303,14 +315,35 @@ fn t_trie_ref_input(root: ByteArray, with_nft: Bool) -> Input {
     },
     output: Output {
       address: Address {
-        payment_credential: Script(t_completed_peg_outs_policy),
+        payment_credential: Script(t_bridge_state_policy),
         stake_credential: None,
       },
       value,
-      datum: InlineDatum(TrieDatum { root }),
+      datum: InlineDatum(
+        BridgeState {
+          spi_root,
+          cpo_root,
+          treasury_utxo_id: #"abababababababababababababababababababababababababababababababab00000000",
+          treasury_amount: 5_000_000,
+        },
+      ),
       reference_script: None,
     },
   }
+}
+
+//A decoy spi_root (BridgeState field 0) that unmasks a [LIB-2]-style blind
+//field-0 read (utils.get_mpf_from_output): the decoy trie CONTAINS
+//t_por_id() under a wrong value, so against it `has` with the expected
+//value fails AND `miss` fails. Only reading cpo_root by name passes the
+//happy paths.
+fn t_decoy_spi_root() -> ByteArray {
+  mpf.insert(mpf.empty, t_por_id(), "decoy", []) |> mpf.root
+}
+
+//Singleton whose cpo_root is the given root and whose spi_root is the decoy.
+fn t_singleton(cpo_root: ByteArray) -> Input {
+  t_bridge_state_ref_input(t_decoy_spi_root(), cpo_root, True)
 }
 
 fn t_peg_out_own_ref() -> OutputReference {
@@ -365,7 +398,7 @@ fn t_expected_value(net_amount: Int) -> ByteArray {
 
 fn t_withdraw(
   peg_out_input: Input,
-  trie_ref_input: Input,
+  singleton_ref_input: Input,
   action: PegOutActionType,
   mint: Value,
   extra_signatories: List<ByteArray>,
@@ -374,7 +407,7 @@ fn t_withdraw(
   let tx = Transaction {
     ..placeholder,
     inputs: [peg_out_input],
-    reference_inputs: [t_config_ref_input(), trie_ref_input],
+    reference_inputs: [t_config_ref_input(), singleton_ref_input],
     mint,
     extra_signatories,
     validity_range,
@@ -400,22 +433,22 @@ const t_locked: Int = 100_000
 
 const t_fee: Int = 1_000
 
-//net_amount = t_locked - t_fee = 99_000; the trie a well-behaved TM Confirm
-//would have produced for this request.
-fn t_happy_trie() -> Input {
+//net_amount = t_locked - t_fee = 99_000; the singleton a well-behaved TM
+//Confirm would have produced for this request: its cpo_root holds the entry.
+fn t_happy_singleton() -> Input {
   let trie = mpf.insert(
     mpf.empty,
     t_por_id(),
     t_expected_value(t_locked - t_fee),
     [],
   )
-  t_trie_ref_input(mpf.root(trie), True)
+  t_singleton(mpf.root(trie))
 }
 
 test complete_happy_path() {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_happy_trie(),
+    t_happy_singleton(),
     CompletePegOut { membership_proof: [] },
     assets.from_asset(t_bridged_token_policy, t_bridged_token_asset, -t_locked),
     [t_owner_hash],
@@ -429,7 +462,7 @@ test complete_happy_path() {
 test complete_rejects_wrong_value() fail {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee + 1),
-    t_happy_trie(),
+    t_happy_singleton(),
     CompletePegOut { membership_proof: [] },
     assets.from_asset(t_bridged_token_policy, t_bridged_token_asset, -t_locked),
     [t_owner_hash],
@@ -437,8 +470,9 @@ test complete_rejects_wrong_value() fail {
   )
 }
 
-//The trie only knows a different POR id (a foreign request); this request's
-//own outpoint hashes to a different id, so no membership proof can match.
+//The cpo_root only knows a different POR id (a foreign request); this
+//request's own outpoint hashes to a different id, so no membership proof
+//can match.
 test complete_rejects_wrong_id() fail {
   let foreign_id = utils.hash_output_ref(
     OutputReference {
@@ -454,7 +488,7 @@ test complete_rejects_wrong_id() fail {
   )
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_trie_ref_input(mpf.root(trie), True),
+    t_singleton(mpf.root(trie)),
     CompletePegOut { membership_proof: [] },
     assets.from_asset(t_bridged_token_policy, t_bridged_token_asset, -t_locked),
     [t_owner_hash],
@@ -465,7 +499,7 @@ test complete_rejects_wrong_id() fail {
 test complete_rejects_partial_burn() fail {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_happy_trie(),
+    t_happy_singleton(),
     CompletePegOut { membership_proof: [] },
     assets.from_asset(
       t_bridged_token_policy,
@@ -482,7 +516,7 @@ test complete_rejects_partial_burn() fail {
 test complete_by_third_party_succeeds() {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_happy_trie(),
+    t_happy_singleton(),
     CompletePegOut { membership_proof: [] },
     assets.from_asset(t_bridged_token_policy, t_bridged_token_asset, -t_locked),
     [#"ee999999999999999999999999999999999999999999999999999999"],
@@ -494,16 +528,16 @@ test complete_by_third_party_succeeds() {
 // Cancel
 // -----------------------------------------------------------------------------
 
-//The empty trie: por_id is provably absent with the empty proof
-//(`excluding(key, []) == empty.root` for any key).
-fn t_empty_trie() -> Input {
-  t_trie_ref_input(mpf.root(mpf.empty), True)
+//A singleton whose cpo_root is the empty trie: por_id is provably absent
+//with the empty proof (`excluding(key, []) == empty.root` for any key).
+fn t_empty_cpo_singleton() -> Input {
+  t_singleton(mpf.root(mpf.empty))
 }
 
 test cancel_happy_path_after_timeout() {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_empty_trie(),
+    t_empty_cpo_singleton(),
     Cancel { exclusion_proof: [] },
     assets.zero,
     [t_owner_hash],
@@ -517,7 +551,7 @@ test cancel_happy_path_after_timeout() {
 test cancel_rejects_inside_timeout_boundary() fail {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_empty_trie(),
+    t_empty_cpo_singleton(),
     Cancel { exclusion_proof: [] },
     assets.zero,
     [t_owner_hash],
@@ -525,8 +559,9 @@ test cancel_rejects_inside_timeout_boundary() fail {
   )
 }
 
-//The trie already carries this POR id (it was fulfilled): the empty proof
-//no longer reconstructs the trie root, so `miss` correctly returns False.
+//The singleton's cpo_root already carries this POR id (it was fulfilled):
+//the empty proof no longer reconstructs that root, so `miss` correctly
+//returns False.
 test cancel_rejects_membership_id() fail {
   let trie = mpf.insert(
     mpf.empty,
@@ -536,7 +571,7 @@ test cancel_rejects_membership_id() fail {
   )
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_trie_ref_input(mpf.root(trie), True),
+    t_singleton(mpf.root(trie)),
     Cancel { exclusion_proof: [] },
     assets.zero,
     [t_owner_hash],
@@ -547,7 +582,7 @@ test cancel_rejects_membership_id() fail {
 test cancel_rejects_minting_fbtc() fail {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_empty_trie(),
+    t_empty_cpo_singleton(),
     Cancel { exclusion_proof: [] },
     assets.from_asset(t_bridged_token_policy, t_bridged_token_asset, 1),
     [t_owner_hash],
@@ -559,7 +594,7 @@ test cancel_rejects_minting_fbtc() fail {
 test cancel_rejects_not_authorized() fail {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_empty_trie(),
+    t_empty_cpo_singleton(),
     Cancel { exclusion_proof: [] },
     assets.zero,
     [#"ee999999999999999999999999999999999999999999999999999999"],
@@ -571,12 +606,13 @@ test cancel_rejects_not_authorized() fail {
 // Shared
 // -----------------------------------------------------------------------------
 
-//The reference input at the CPO trie's address is missing the CPO NFT: it
-//cannot authenticate a root, so the withdrawal must trap rather than trust it.
-test withdraw_rejects_missing_trie_nft() fail {
+//The reference input at the singleton's address is missing the "BSS" NFT:
+//it cannot authenticate a BridgeState, so the withdrawal must trap rather
+//than trust it. spec [CPO-13].
+test withdraw_rejects_missing_singleton_nft() fail {
   t_withdraw(
     t_peg_out_input(t_locked, t_fee),
-    t_trie_ref_input(mpf.root(mpf.empty), False),
+    t_bridge_state_ref_input(t_decoy_spi_root(), mpf.root(mpf.empty), False),
     Cancel { exclusion_proof: [] },
     assets.zero,
     [t_owner_hash],

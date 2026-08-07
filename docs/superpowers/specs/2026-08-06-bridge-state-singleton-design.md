@@ -160,6 +160,34 @@ leader reward are all GONE.
 > then forbade removing anything. One nested record can be replaced wholesale by
 > governance without renumbering its neighbours.
 
+*Implementation status* (2026-08-07). The seven-field table and [CFG-1] are
+implemented in `onchain/lib/bifrost/types/config.ak`. Every reader is migrated:
+`config.ak`, `bridged-token.ak`, `completed-peg-ins-merkle-tree.ak`, `peg-in.ak`
+and `peg-out.ak`.
+
+Decisions taken during implementation:
+
+- **`min_stake` leaves the datum, although the table does not name it.** The
+  table is exhaustive, and `min_stake` had no on-chain reader:
+  it gated heimdall's R2 registration off-chain only. The rejected alternative
+  was to keep it as an eighth field, which would have contradicted the table and
+  re-created the append-only pressure §Config datum removes.
+- **The params getters read positionally through the nested record.**
+  `get_fee_rate_sat_per_vb` and its neighbours unwrap Config field 6 with a
+  private helper, then index inside it. The rejected alternative was one
+  `get_params` that casts to `ConfigParams`. A full cast pins the nested record's
+  arity, so appending a parameter would break every reader, which is the exact
+  property the nesting exists to avoid. `get_schedule` keeps its full cast, and
+  stays off-chain/test-only for the same reason.
+- **The test fixtures build the Config datum as raw `Data`, not as a
+  `ConfigDatum` record.** `config.ak`'s spend handler takes the datum raw, and
+  every reader uses positional getters, so raw fixtures mirror what a deployed
+  reader sees and survive a later shape change. The rejected alternative was
+  typed record fixtures, which pass even when the wire layout drifts from the
+  getter indexes. `config_getters_match_datum_fields` is the one deliberate
+  exception: it builds a real record precisely so a reorder of the record
+  definition against the getter indexes fails it.
+
 ### BridgeState, the singleton datum
 
 ```aiken
@@ -556,7 +584,7 @@ implemented in `onchain/validators/bitcoin/bridge-state.ak`. `BridgeState` is in
 `onchain/lib/bifrost/types/bridge-state.ak`.
 `onchain/validators/bitcoin/completed-peg-outs-merkle-tree.ak` is deleted: the
 singleton replaces the rev-5.1 CPO trie UTxO. `completed_peg_outs_root_asset_name`
-stays in `constants.ak` until `peg-out.ak` stops reading it.
+is gone from `constants.ak` too, now that [CPO-13] removed its last reader.
 
 Decisions taken during implementation:
 
@@ -684,6 +712,29 @@ days, mirroring `peg_out_cancel_timeout_ms`.
 
 Every other rule is unchanged: value-bound membership at Complete,
 non-membership and timeout at Cancel.
+
+*Implementation status* (2026-08-07). [CPO-13] is implemented in
+`onchain/validators/bitcoin/peg-out.ak`. The withdraw prelude authenticates the
+reference input with the `(bridge_state_policy, "BSS")` NFT, decodes it as
+`BridgeState`, and builds the trie from `state.cpo_root` by name.
+
+Decisions taken during implementation:
+
+- **The redeemer field keeps the name `completed_peg_outs_ref_input_index`.** It
+  now indexes the singleton reference input. The rejected alternative was to
+  rename it, which changes no serialized shape but does churn every off-chain
+  builder for a comment-sized gain.
+- **The peg-out tests give the singleton a decoy `spi_root`.** The decoy trie
+  contains the same POR id under a wrong value, so a [LIB-2]-style blind field-0
+  read fails `has` and `miss` alike. The rejected alternative was an empty
+  `spi_root`, against which a blind read still passes Complete and, worse, still
+  passes Cancel.
+- **`peg-in.ak`'s Cancel branch becomes a hard `False`, not a removed branch.**
+  Its Config field disappears here, but the branch belongs to the clr-close-pir
+  task. The deployed field held a dummy hash with no reward account, so Cancel
+  was already unsatisfiable and `False` preserves behaviour exactly. The rejected
+  alternative was to implement the SPI-trie close in this task, which would have
+  merged two reviews into one.
 
 ### Update-Y, federation branch
 

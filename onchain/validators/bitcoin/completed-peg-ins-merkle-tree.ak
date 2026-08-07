@@ -79,7 +79,7 @@ validator completed_peg_ins_merkle_tree_validator(
         configNFTAssetName,
       )
     let peg_in_withdraw_script_hash =
-      config.get_peg_in_withdraw_script_hash(config_fields)
+      config.get_peg_in_script_hash(config_fields)
     let peg_in_withdraw_redeemer =
       utils.safe_list_at(
         self.redeemers,

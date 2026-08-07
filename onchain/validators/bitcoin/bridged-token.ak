@@ -1,6 +1,8 @@
+use aiken/builtin
 use aiken/collection/dict
 use aiken/collection/pairs
-use bifrost/types/config.{ConfigDatum, ScheduleParams}
+use bifrost/constants
+use bifrost/types/config.{ScheduleParams}
 use bifrost/types/general.{CardanoSignature}
 use bifrost/utils
 use cardano/address.{Address, Script}
@@ -15,11 +17,11 @@ pub type MintRedeemer {
 }
 
 //The fSAT minting policy: an immutable presence delegator. Its script hash is
-//the stable fSAT policy id (ConfigDatum field 0). It authorizes a mint (qty>0)
+//the stable fSAT policy id (ConfigDatum field 1). It authorizes a mint (qty>0)
 //by requiring the peg-in withdraw script to run, and a burn (qty<0) by
 //requiring the peg-out withdraw script; those validators constrain the mint
 //amount on every action (peg completion pins it; Cancel forbids it). This
-//policy adds the single-asset-name guard and the config[0]==policy_id anchor.
+//policy adds the single-asset-name guard and the config[1]==policy_id anchor.
 validator bridged_token(
   configNFTPolicyId: ByteArray,
   configNFTAssetName: ByteArray,
@@ -34,9 +36,10 @@ validator bridged_token(
         configNFTPolicyId,
         configNFTAssetName,
       )
-    //Anchor: the peg validators constrain the mint of config[0]; it must be us.
-    expect config.get_bridged_token_policy_id(config_fields) == policy_id
-    let asset_name = config.get_bridged_token_asset_name(config_fields)
+    //Anchor: the peg validators constrain the mint of config[1]; it must be us.
+    expect config.get_bridged_token_policy(config_fields) == policy_id
+    //spec [CFG-1]: the asset name is a protocol constant, not a Config field
+    let asset_name = constants.bridged_token_asset_name
     //Exactly one asset name under our policy, and it is the canonical one.
     expect [Pair(minted_name, minted_qty)] =
       dict.to_pairs(tokens(self.mint, policy_id))
@@ -44,12 +47,12 @@ validator bridged_token(
     if minted_qty > 0 {
       pairs.has_key(
         self.withdrawals,
-        Script(config.get_peg_in_withdraw_script_hash(config_fields)),
+        Script(config.get_peg_in_script_hash(config_fields)),
       )
     } else {
       pairs.has_key(
         self.withdrawals,
-        Script(config.get_peg_out_withdraw_script_hash(config_fields)),
+        Script(config.get_peg_out_script_hash(config_fields)),
       )
     }
   }
@@ -77,25 +80,18 @@ const t_peg_in_hash: ByteArray =
 const t_peg_out_hash: ByteArray =
   #"aa777777777777777777777777777777777777777777777777777777"
 
-fn t_config_datum() -> ConfigDatum {
-  ConfigDatum {
-    bridged_token_policy_id: t_own_policy,
-    bridged_token_asset_name: "fSAT",
-    completed_peg_ins_merkle_tree_policy_id: #"aa22",
-    completed_peg_outs_merkle_tree_policy_id: #"aa33",
-    peg_in_withdraw_script_hash: t_peg_in_hash,
-    peg_out_withdraw_script_hash: t_peg_out_hash,
-    peg_in_close_verifier_script_hash: #"aa66",
-    legit_treasury_movement_and_peg_out_produced_verifier_script_hash: #"aa77",
-    legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash: #"aa88",
-    min_stake: 0,
-    update_auth: Some(CardanoSignature { hash: #"aadd" }),
-    initial_btc_treasury_utxo: #"aaee",
-    fee_rate_sat_per_vb: 1,
-    per_pegout_fee: 1000,
-    min_peg_out_fbtc: 10000,
-    leader_reward: 2_000_000,
-    schedule: ScheduleParams {
+//The rev-5.4 seven-field Config datum (spec §Config datum), built as raw
+//Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
+//3 bridge_state_policy, 4 peg_in_script_hash, 5 peg_out_script_hash,
+//6 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
+//No asset name field: spec [CFG-1] makes it the constant "fSAT". Raw on
+//purpose: readers use positional getters and never cast to ConfigDatum, so
+//the fixture mirrors the wire encoding a deployed reader sees, and it stays
+//valid across a future datum shape evolution.
+fn t_config_datum_data() -> Data {
+  let update_auth_data: Data = Some(CardanoSignature { hash: #"aadd" })
+  let schedule_data: Data =
+    ScheduleParams {
       dkg_r1_deadline: 3600,
       dkg_r2_deadline: 7200,
       update_y_deadline: 10800,
@@ -106,15 +102,29 @@ fn t_config_datum() -> ConfigDatum {
       tm_recovery_window: 129600,
       final_tm_cutoff: 345600,
       stability_window: 129600,
-    },
-    spo_bans_policy_id: #"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    base_ban_duration_ms: 600_000,
-    max_faults_before_permanent: 3,
-    max_validity_window_ms: 3_600_000,
-    spos_registry_policy_id: #"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    treasury_info_policy_id: #"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    treasury_info_asset_name: "TMTx",
-  }
+    }
+  let params_data: Data =
+    builtin.constr_data(
+      0,
+      [
+        builtin.i_data(1),
+        builtin.i_data(1000),
+        builtin.i_data(10000),
+        schedule_data,
+      ],
+    )
+  builtin.constr_data(
+    0,
+    [
+      update_auth_data,
+      builtin.b_data(t_own_policy),
+      builtin.b_data(#"aa222222222222222222222222222222222222222222222222222222"),
+      builtin.b_data(#"aa333333333333333333333333333333333333333333333333333333"),
+      builtin.b_data(t_peg_in_hash),
+      builtin.b_data(t_peg_out_hash),
+      params_data,
+    ],
+  )
 }
 
 fn t_config_ref_input() -> Input {
@@ -130,7 +140,7 @@ fn t_config_ref_input() -> Input {
       },
       value: assets.from_lovelace(2_000_000)
         |> assets.add(t_config_policy, t_config_asset, 1),
-      datum: InlineDatum(t_config_datum()),
+      datum: InlineDatum(t_config_datum_data()),
       reference_script: None,
     },
   }
@@ -152,7 +162,7 @@ test mint_accepts_with_peg_in_withdrawal() {
       ..placeholder,
       reference_inputs: [t_config_ref_input()],
       withdrawals: [Pair(Script(t_peg_in_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100),
+      mint: assets.from_asset(t_own_policy, constants.bridged_token_asset_name, 100),
     }
   t_mint(t_own_policy, tx)
 }
@@ -163,7 +173,7 @@ test burn_accepts_with_peg_out_withdrawal() {
       ..placeholder,
       reference_inputs: [t_config_ref_input()],
       withdrawals: [Pair(Script(t_peg_out_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", -100),
+      mint: assets.from_asset(t_own_policy, constants.bridged_token_asset_name, -100),
     }
   t_mint(t_own_policy, tx)
 }
@@ -175,7 +185,7 @@ test mint_rejects_wrong_sign_dispatch() fail {
       ..placeholder,
       reference_inputs: [t_config_ref_input()],
       withdrawals: [Pair(Script(t_peg_out_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100),
+      mint: assets.from_asset(t_own_policy, constants.bridged_token_asset_name, 100),
     }
   expect t_mint(t_own_policy, tx)
 }
@@ -186,7 +196,7 @@ test mint_rejects_missing_withdrawal() fail {
       ..placeholder,
       reference_inputs: [t_config_ref_input()],
       withdrawals: [],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100),
+      mint: assets.from_asset(t_own_policy, constants.bridged_token_asset_name, 100),
     }
   expect t_mint(t_own_policy, tx)
 }
@@ -198,7 +208,7 @@ test mint_rejects_config_policy_id_mismatch() fail {
       ..placeholder,
       reference_inputs: [t_config_ref_input()],
       withdrawals: [Pair(Script(t_peg_in_hash), 0)],
-      mint: assets.from_asset(other, "fSAT", 100),
+      mint: assets.from_asset(other, constants.bridged_token_asset_name, 100),
     }
   expect t_mint(other, tx)
 }
@@ -209,7 +219,7 @@ test mint_rejects_second_asset_name() fail {
       ..placeholder,
       reference_inputs: [t_config_ref_input()],
       withdrawals: [Pair(Script(t_peg_in_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100)
+      mint: assets.from_asset(t_own_policy, constants.bridged_token_asset_name, 100)
         |> assets.add(t_own_policy, "junk", 1),
     }
   expect t_mint(t_own_policy, tx)
@@ -229,7 +239,7 @@ test mint_rejects_ref_input_without_config_nft() fail {
       ..placeholder,
       reference_inputs: [no_nft],
       withdrawals: [Pair(Script(t_peg_in_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100),
+      mint: assets.from_asset(t_own_policy, constants.bridged_token_asset_name, 100),
     }
   expect t_mint(t_own_policy, tx)
 }

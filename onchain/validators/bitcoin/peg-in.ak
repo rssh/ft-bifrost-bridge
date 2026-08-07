@@ -49,10 +49,11 @@ validator peg_in_validator(
       fn(Pair(_asset_name, quantity)) { quantity > 0 },
     )
     when minted_positive is {
-      // Burn-only (Cancel close): no positive mint under this policy. Permitted — the PIR being
+      // Burn-only (Cancel close): no positive mint under this policy. Permitted – the PIR being
       // burned can only be spent via this script's spend handler, which forces a peg_in withdrawal,
-      // and withdraw(Cancel) gates the burn on the config[12] close-verifier delegation. A close tx
-      // references no oracle / deposit, so it must not be forced through the mint-time checks below.
+      // and withdraw(Cancel) gates the burn (transitionally hard False; the clr-close-pir task wires
+      // the SPI-trie close). A close tx references no oracle / deposit, so it must not be forced
+      // through the mint-time checks below.
       [] -> True
       [Pair(minted_asset_name, 1)] -> {
         //Oracle reference input
@@ -151,19 +152,13 @@ validator peg_in_validator(
       config_nft_asset_name,
     )
     let bridged_token_policy_id =
-      config.get_bridged_token_policy_id(config_fields)
-    let bridged_token_asset_name =
-      config.get_bridged_token_asset_name(config_fields)
+      config.get_bridged_token_policy(config_fields)
+    //spec [CFG-1]: the asset name is a protocol constant, not a Config field
+    let bridged_token_asset_name = constants.bridged_token_asset_name
     let completed_peg_ins_merkle_tree_policy_id =
-      config.get_completed_peg_ins_merkle_tree_policy_id(config_fields)
+      config.get_completed_peg_ins_policy(config_fields)
     let completed_peg_ins_merkle_tree_asset_name =
       constants.completed_peg_ins_root_asset_name
-    // The peg-in CLOSE verifier (slot vacated by the retired legit_TM_verifier). The Cancel path
-    // delegates the F4/F5 close checks to it (see below). It is a config-NFT field (runtime), so
-    // the close verifier can be deployed + wired via a config update with no peg_in recompile /
-    // PIR re-mint. Dummy until the F1–F6 failure-mode milestone ships.
-    let peg_in_close_verifier_script_hash =
-      config.get_peg_in_close_verifier_script_hash(config_fields)
     expect [peg_in_input] = list.filter(
       self.inputs,
       fn(input) { input.output.address.payment_credential == credential },
@@ -171,24 +166,14 @@ validator peg_in_validator(
     when redeemer.action_type is {
       Cancel { burnt_peg_in_nft_asset_name } -> {
         expect Script(peg_in_policy_id) = credential
-        //PegIn close authorized by the peg-in CLOSE verifier (peg_in_close_verifier_script_hash) – the stake-validator
-        //delegation pattern. The separate close verifier owns the spec's F4/F5 logic (F4: the
-        //depositor reclaimed the BTC on the Bitcoin side via the Taproot CSV refund leaf, proven by
-        //a refund-script witness; F5: this PIR is a duplicate, proven by a completed-peg-ins trie
-        //inclusion proof). peg_in.ak only requires the verifier's withdrawal is present and burns the
-        //PIR NFT; it stays agnostic to the verifier's redeemer. Until that verifier is deployed and
-        //wired into the config (F1–F6 milestone), the field holds a dummy hash with no reward account,
-        //so this Cancel path is cleanly unsatisfiable.
-        let close_authorized = list.any(
-          self.withdrawals,
-          fn(withdrawal) {
-            when withdrawal is {
-              Pair(Script(script_hash), _amnt) ->
-                script_hash == peg_in_close_verifier_script_hash
-              _ -> False
-            }
-          },
-        )
+        //TRANSITIONAL: hard False, replaced by the clr-close-pir task. The
+        //rev-5.1 Cancel path delegated the close checks to the (never
+        //deployed) peg-in close verifier; its ConfigDatum field is removed in
+        //the rev-5.4 seven-field layout (spec §Config datum). The deployed
+        //field held a dummy hash with no reward account, so Cancel was
+        //already unsatisfiable; False preserves that behavior exactly until
+        //the SPI-trie close ([CLR-5]/[CLR-6]/[CLR-8]) replaces this branch.
+        let close_authorized = False
         //Input must contain a PegIn nft
         let peg_in_nft_in_input = quantity_of(
           peg_in_input.output.value,

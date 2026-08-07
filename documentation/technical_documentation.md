@@ -45,10 +45,13 @@ Bitcoin transaction shapes and address derivation, canonical byte layouts and si
 the deterministic construction and skip rules, the protocol schedule, and the flows.
 
 **Out of scope — with named owners**: participant internals. Every out-of-scope statement in
-this document MUST point to the document that owns the topic. The SPO program's
-implementation (heimdall documentation), the watchtower and oracle internals (the Binocular
-whitepaper [1]), and the federation's internal signing procedure (the federation's operational
-documentation). Each must satisfy the interfaces defined here.
+this document MUST point to the document that owns the topic **by reference, not by name alone**,
+so that a reader can actually reach it. The SPO program's implementation (heimdall [8]), the
+watchtower and oracle internals (the Binocular whitepaper [1]), and the federation's internal
+signing procedure (the federation's operational documentation — **not yet published**, which is a
+gap in this rule rather than an exemption from it). Each must satisfy the interfaces defined here.
+
+Work this document defers rather than answers is owned by *Final optimizations* [9].
 
 **Per-instance data.** Parameter values, deployed policy ids and script hashes, the genesis
 treasury outpoint, and the **federation charter** are not protocol content — but every instance
@@ -4467,3 +4470,9 @@ Bifrost's watchtower design relies on a minimal trust assumption: only one hones
 [6] David, B., Gaži, P., Kiayias, A., Russell, A. "Ouroboros Praos: An Adaptively-Secure, Semi-synchronous Proof-of-Stake Blockchain." EUROCRYPT 2018. <https://eprint.iacr.org/2017/573>
 
 [7] Badertscher, C., Gaži, P., Kiayias, A., Russell, A., Zikas, V. "Ouroboros Genesis: Composable Proof-of-Stake Blockchains with Dynamic Availability." ACM CCS 2018. <https://eprint.iacr.org/2018/378>
+
+[8] *heimdall* — the SPO program (specification, design, decision log).
+<https://github.com/lantr-io/heimdall> — `Specification.md`, `Design.md`, `DecisionsLog.md`
+
+[9] *Bifrost Final Optimizations* — deferred work and open questions; non-normative.
+[documentation/final-optimizations.md](final-optimizations.md)

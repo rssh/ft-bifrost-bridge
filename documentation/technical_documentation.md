@@ -2887,15 +2887,18 @@ special case.
 order `(creation slot, creating txid, output index)`. The batch takes the first at most
 `max_pegins_per_tm` peg-ins and `max_pegouts_per_tm` peg-outs (derived from the ~15 KB raw-TM
 ceiling: ≈100 + 100 in the 51% key-path variant, ≈57 + 57 in the federation variant). Overflow
-**peg-ins** wait for the next batch. Overflow **peg-outs are dead**: once this TM spends their
-named tip, no future TM can ever pay them — they recover their fBTC via the race-free *Cancel
-PegOut request*. This asymmetry is the honest price of outpoint pinning.
+**peg-ins** wait for the next batch, and so do overflow **peg-outs** — a peg-out is payable by
+whichever TM includes it, so missing a batch costs only latency. What eventually stops a peg-out
+being fulfilled is not overflow but the **fulfillment freshness filter** above: once
+`created + peg_out_cancel_timeout_ms − now` falls below the margin, no further TM may pay it and
+its only path is *Cancel PegOut request*.
 
-**Wallet guidance (peg-out targeting).** Before locking, request-building software SHOULD check
-the pending peg-out queue depth against the remaining batch capacity, and choose the treasury
-outpoint to name as follows: the confirmed tip if no TM is in flight; the **posted** TM's
-`out[0]` (readable from its `Unconfirmed` record — the tip-to-be) while one is. A peg-out created
-against an about-to-be-spent tip lands in the dead-on-arrival case above.
+**Wallet guidance (peg-out creation).** Before locking, request-building software SHOULD set
+`created` to the current time rather than backdating it — `created` is requester-set and nothing
+verifies it, but it is the freshness filter's input, so a backdated value only shortens the window
+in which a TM may fulfil the request (see *Create PegOut request*). It SHOULD also set
+`per_pegout_fee` at or above the Operational-params floor and lock at least `min_peg_out_fbtc`;
+a request failing either is skipped by every SPO and can only be cancelled.
 
 **The schedule.** All protocol deadlines are slot arithmetic from the epoch boundary `E`. The
 normative content is each parameter's **kind and constraint** — concrete values are non-normative

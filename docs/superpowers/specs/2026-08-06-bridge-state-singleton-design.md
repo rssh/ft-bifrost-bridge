@@ -29,7 +29,7 @@ Each term has one spelling and one meaning throughout.
 | Term | Meaning |
 |---|---|
 | **TM** | Treasury Movement. The Bitcoin transaction that moves the treasury, and the Cardano record that tracks it. |
-| **singleton** | The bridge state UTxO. It carries both roots, the chain head, the treasury amount, and the federation sweep txid. |
+| **singleton** | The bridge state UTxO. It carries both roots, the chain head and the treasury amount. |
 | **head** | `treasury_utxo_id`, the Bitcoin outpoint the next TM spends as its input 0. [CTM-18] enforces it. |
 | **SPI trie** | MPF recording every deposit a confirmed TM took into the treasury. Root = `spi_root`. |
 | **CPO trie** | MPF recording every peg-out a confirmed TM paid. Root = `cpo_root`. |
@@ -173,10 +173,6 @@ pub type BridgeState {
   treasury_utxo_id: ByteArray,
   //Its satoshi amount.
   treasury_amount: Int,
-  //btc_txid of the last TM that swept via the federation CSV leaf, else empty.
-  //FederationReset's dead-roster evidence, computed at Confirm because the
-  //witness is only visible there.
-  last_federation_sweep_txid: ByteArray,
 }
 ```
 
@@ -186,7 +182,6 @@ pub type BridgeState {
 | 1 | `cpo_root` | 32 | the commitment output, second root |
 | 2 | `treasury_utxo_id` | 36 | `btc_txid ‖ 00000000` |
 | 3 | `treasury_amount` | int | satoshi amount of the TM's output 0 |
-| 4 | `last_federation_sweep_txid` | 0 or 32 | `btc_txid` when the federation leaf was used |
 
 The indices are serialization facts, because the datum is a Plutus `Constr` and
 field order is consensus-visible. No validator uses them.
@@ -291,7 +286,7 @@ Binocular-confirmed TM, and retire the TM record.
 | Output | none at the TM script address |
 | Mint | the TM NFT, quantity −1 |
 
-**Checks enforced on-chain**: [CTM-17] through [CTM-31], plus [BSS-1] and
+**Checks enforced on-chain**: [CTM-17] through [CTM-30], plus [BSS-1] and
 [BSS-2] on the singleton's own validator.
 
 **Checks delegated off-chain**: root correctness. The quorum attests both roots
@@ -475,8 +470,6 @@ PegInRequest.
   `spi_root` equals bytes [7, 39) of the commitment output.
 - [CTM-21] `TreasuryMovementValidator` MUST verify the continuing singleton's
   `treasury_amount` equals the satoshi amount of the TM's output 0.
-- [CTM-22] `TreasuryMovementValidator` MUST set `last_federation_sweep_txid` to
-  `btc_txid` when `spent_via_federation_leaf` is true.
 - [CTM-24] `TreasuryMovementValidator` MUST verify the Confirm spend burns the
   TM NFT, that is `mint == -1` under the TM policy.
 - [CTM-25] `TreasuryMovementValidator` MUST verify the Confirm spend produces no
@@ -491,8 +484,6 @@ PegInRequest.
   output carries that NFT at the same address as the spent one.
 - [CTM-30] `TreasuryMovementValidator` MUST verify the continuing singleton's
   `cpo_root` equals bytes [39, 71) of the commitment output.
-- [CTM-31] `TreasuryMovementValidator` MUST carry `last_federation_sweep_txid`
-  unchanged when `spent_via_federation_leaf` is false.
 - [CTM-17] SURVIVES UNCHANGED on the Confirm path. Exactly one input at the TM
   script address.
 - [CTM-6] to [CTM-8] REVISED. Garbage collection applies to `Unconfirmed`
@@ -667,29 +658,10 @@ non-membership and timeout at Cancel.
 
 ### Update-Y, federation reset
 
-- [UY-7] REVISED. `treasury.ak` MUST verify the singleton reference input's
-  `last_federation_sweep_txid` is non-empty. It replaces the read of
-  `spent_via_federation_leaf` from a `Confirmed` record.
-- [UY-8] REVISED. `treasury.ak` MUST verify
-  `last_federation_sweep_txid ≠ last_reset_tm_txid`.
-- [UY-9] `treasury.ak` MUST authenticate the singleton reference input by the
-  NFT `(bridge_state_policy, "BSS")`.
-- [UY-10] `treasury.ak` MUST advance `last_reset_tm_txid` to
-  `last_federation_sweep_txid`.
-
-> **What changes beyond the location.** The read moves from a boolean at Constr
-> index 3 to a byte field, and `treasury.ak`'s parameters change with it per
-> [PAR-1]. Both are code changes, not a relocation. [UY-8]'s semantics are
-> unchanged, and the empty-versus-empty first-deployment case still correctly
-> blocks a reset.
-
-> **Why this evidence path survives.** `2026-08-07-key-lifecycle-design.md`
-> would delete it, by authorizing the federation on a timeout instead of on a
-> Bitcoin sweep. That design is POSTPONED, and this revision must stand alone:
-> it removes the `Confirmed` record, which is where `FederationReset` reads its
-> evidence today. Relocating the field is therefore not optional. If the
-> key-lifecycle design later lands, [CTM-22], [CTM-31], [UY-7] to [UY-10] and
-> the field itself all go with it.
+- [UY-5] to [UY-8] WITHDRAWN. `treasury.ak` MUST NOT carry a `FederationReset`
+  spend branch. See §No dead-roster recovery.
+- [UY-9], [UY-10] NEVER ISSUED. An earlier draft used them to relocate the
+  evidence into the singleton instead of removing the branch.
 
 ## Off-chain rules
 
@@ -792,7 +764,7 @@ What stays:
 |---|---|---|
 | Complete peg-in [CPI-2], [CPI-3] | `Confirmed` record | singleton `spi_root` |
 | Leader reward [CPI-7] | `Confirmed` record's poster and pinned amount | nothing, WITHDRAWN and deferred |
-| `treasury.ak::FederationReset` [UY-7], [UY-8] | `Confirmed` record | singleton `last_federation_sweep_txid` |
+| `treasury.ak::FederationReset` [UY-7], [UY-8] | `Confirmed` record | nothing, the branch is REMOVED |
 | Post signed TM [PTM-5] | predecessor `Confirmed` record | singleton head |
 | Treasury reconstruction | tip record's parsed `outputs[0]` | singleton `treasury_amount` |
 | Leader election entropy | tip `btc_txid` | singleton head |
@@ -806,9 +778,8 @@ What stays:
 | frontend `claim.ts` payout discovery | `Confirmed.fulfilled_peg_outs` | singleton `cpo_root` |
 | Complete peg-out, Cancel | singleton root | unchanged, but see [CPO-13] |
 
-`FederationReset` must move or it breaks outright. Once the head has advanced
-past the federation sweep, its `Confirmed` record can never be re-created, so a
-garbage-collected record would strand the dead-roster recovery permanently.
+`FederationReset` is removed rather than relocated. See §No dead-roster
+recovery.
 
 ## Recovery: replacing the singleton
 
@@ -946,9 +917,9 @@ earlier blast-radius analysis.
 ## Deleting the Aiken TM datum mirror
 
 `lib/bifrost/types/treasury-movement.ak` mirrors the Scalus `TmDatum`. Its two
-importers, `treasury.ak` for `FederationReset` and `peg-in.ak` for
-`CompletePegIn`, both lose their reason to read it: [UY-7] moves to the
-singleton and [CPI-9] replaces [CPI-2]. With no `Confirmed` record there is
+importers, `treasury.ak` for the removed `FederationReset` and `peg-in.ak` for
+`CompletePegIn`, both lose their reason to read it: `FederationReset` is removed
+and [CPI-9] replaces [CPI-2]. With no `Confirmed` record there is
 nothing left to mirror.
 
 - [MIR-1] An implementer MUST NOT delete the file before both importers move.
@@ -967,9 +938,9 @@ nothing left to mirror.
 be replaced without abandoning their state, so their defects have to be fixed
 first.
 
-- [PRE-1] `treasury.ak` MUST take the config NFT parameters and read
-  `bridge_state_policy` at runtime, per [PAR-1]. It MUST NOT take
-  `tm_nft_policy_id`.
+- [PRE-1] `treasury.ak` MUST NOT take `tm_nft_policy_id`. With
+  `FederationReset` removed it reads nothing the bridge owns, so its only
+  parameter is `registry_policy_id`.
 - [PRE-2] The `treasury.ak` bootstrap MUST accept an operator-supplied
   `bifrost_identity_root` instead of hard-coding the empty MPF root.
 - [PRE-3] `spos-registry` MUST be reviewed for the same one-way properties.
@@ -981,6 +952,45 @@ first.
 > a compile parameter, any later change to the TM validator's hash breaks
 > `FederationReset` permanently. Every other contract in this design is
 > replaceable through a Config field. These two are not.
+
+## No dead-roster recovery
+
+`FederationReset` is removed, and nothing replaces it in this revision. That is
+a deliberate, recorded gap, not an oversight.
+
+**What still works.** The Bitcoin federation CSV leaf is untouched. If the roster
+dies, the federation can still sweep the treasury once it has aged past
+`federation_csv_blocks`, so user funds remain recoverable under the federation
+charter.
+
+**What does not.** `current_spos_frost_key` can only be rotated by a signature
+under itself ([UY-3]). A permanently dead roster therefore freezes it. No new key
+can be installed, no new TM can be signed, and every new deposit derives to an
+address nobody can spend. Recovery is deploying a new bridge instance.
+
+- [FED-1] Operators MUST NOT run this revision on a network holding value that
+  the federation charter does not already cover.
+- [FED-2] The key lifecycle MUST be designed before mainnet.
+
+> **Why remove it rather than relocate it.** Keeping the branch costs a datum
+> field on the singleton, two Confirm checks to write and carry it, a witness
+> shape computation on every TM, and a `tm_nft_policy_id` parameter on
+> `treasury.ak` that permanently couples it to the TM validator's hash. All of
+> that serves an event that happens at most once per dead roster, through a
+> mechanism a review found to be the wrong shape anyway: proving deadness by a
+> Bitcoin sweep, rather than by the roster's inability to sign.
+>
+> `2026-08-07-key-lifecycle-design.md` sketches the replacement, authorizing the
+> federation on a timeout. It is postponed with known defects. Removing the old
+> branch now means the replacement arrives as one coherent design instead of
+> being retrofitted around evidence plumbing this revision would otherwise have
+> shipped.
+
+> **What this deletes from the code.** `spent_via_federation_leaf` and its
+> `isValidScriptPathWitness` computation leave the TM validator entirely.
+> `last_reset_tm_txid` leaves `TreasuryDatum`. `treasury.ak` loses its
+> `FederationReset` branch and its `tm_nft_policy_id` parameter, and with them
+> its last read of anything the bridge owns.
 
 ## Cost
 
@@ -1020,18 +1030,6 @@ values:
 | `cpo_root` | 32 zero bytes |
 | `treasury_utxo_id` | the anchor outpoint |
 | `treasury_amount` | the anchor's satoshi amount |
-| `last_federation_sweep_txid` | empty |
-
-- [DEP-3] When §Recovery replaces the singleton, the operator MUST carry
-  `last_federation_sweep_txid` across unless it has already been consumed by a
-  reset.
-
-> **Why [DEP-3].** The likely reason to replace the singleton IS a federation
-> CSV sweep, and bootstrapping the field empty would block the very reset that
-> sweep exists to enable. The reverse error is permanent: [CTM-31] carries the
-> field unchanged forever, so a wrong non-empty value never washes out and
-> satisfies [UY-7] and [UY-8] on demand. Observers MUST therefore verify all five
-> bootstrap fields, not only the roots.
 
 Every field is operator-supplied. Observers verify the roots by reconstruction,
 per §Recovery: replacing the singleton.

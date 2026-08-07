@@ -2196,6 +2196,52 @@ flowchart LR
 > (`bitcoin.deposit_binding_ok`). The peg-in *deposit* tx (`source_chain_peg_in_raw_tx`) is stored
 > already witness-stripped — its witnesses are never inspected.
 
+> **Implementation status (rev 5.4, bridge state singleton).** The deployed `peg-in.ak` withdraw
+> handler no longer matches the B1 description above. No `Confirmed` TM record exists any more, so
+> the checks changed as follows. The prose, diagram and Structure table in this section are still
+> rev-5.1 and are corrected by this note, not by them. The IDs [PAR-1], [LIB-1], [LIB-2] and the
+> section *The two deposit tries* cited below are defined in
+> `docs/superpowers/specs/2026-08-06-bridge-state-singleton-design.md` until rev 5.4 is folded in
+> here.
+>
+> * **[CPI-1]**, **[CPI-2]** — **Withdrawn.** No `Confirmed` TM record is referenced. The
+>   `tm_nft_policy_id` validator parameter and the `bifrost/types/treasury_movement` import are
+>   removed.
+> * **[CPI-9]** *(new)* — `peg-in.ak` MUST verify an MPF **membership** proof that the bridge state
+>   singleton's `spi_root` maps `datum.peg_in_utxo_id` to the sweeping TM's input-0 outpoint
+>   (36 bytes), supplied in the redeemer as `sweeping_tm_input_0`.
+> * **[CPI-10]** *(new)* — `peg-in.ak` MUST authenticate that reference input by the NFT
+>   `(bridge_state_policy, "BSS")`. `bridge_state_policy` is read from the Config reference input at
+>   runtime (**[PAR-1]**), never from a validator parameter.
+> * **[CPI-3]** — **Revised.** The signed digest drops `btc_txid`. It is now
+>   `sha2_256("BFR-mint-v1" ‖ peg_in_utxo_id ‖ chosen_cardano_address)`. The BIP-322 wrapper is
+>   unchanged: the depositor signs the ASCII text `BFR-mint-v1:<64-hex>` and `peg-in.ak` verifies it
+>   key-path under `user_source_chain_pub_key`.
+> * **[CPI-4]**, **[CPI-5]**, **[CPI-6]**, **[CPI-8]** — kept unchanged. [CPI-6] uses the [CFG-1]
+>   constant asset name.
+> * **[CPI-7]** — **Withdrawn**, not replaced. No leader reward is paid at the mint. **[CPI-11]** and
+>   **[CPI-12]** are PARKED: implementers MUST NOT build them.
+>
+> **Why [CPI-3] may drop `btc_txid`.** No reader can supply it any more — the singleton records the
+> sweeping TM's input-0 outpoint, not its txid. Nothing is lost: `btc_txid` bound the message to the
+> confirmed TM, and [CPI-9] now proves that binding directly against attested state. The
+> replay-resistance the field never provided is still provided by `peg_in_utxo_id` (binds the
+> signature to this deposit) and `chosen_cardano_address` (binds it to this destination).
+>
+> **Trie value.** Per *The two deposit tries*, the CPI trie insert records the **same** value the SPI
+> trie holds — the sweeping TM's input-0 outpoint — not `peg_in_utxo_id` echoed as its own value.
+>
+> **Decisions and rejected alternatives.**
+>
+> * The singleton reference input is located by a redeemer **index**
+>   (`bridge_state_ref_input_index`). *Rejected*: scanning `reference_inputs` for the "BSS" NFT. The
+>   scan costs O(reference inputs) and would silently pick a different UTxO if one ever matched; a
+>   wrong index traps instead.
+> * The datum is decoded as `BridgeState` and `spi_root` is read **by field name** (**[LIB-1]**).
+>   *Rejected*: `utils.get_mpf_from_output`, which reads field 0 blindly. That returns `spi_root`
+>   only by accident of the current field order and would silently return `cpo_root` if the order
+>   changed (**[LIB-2]**). The test fixture puts a decoy trie in `cpo_root` so a swapped read fails.
+
 ### Complete peg-out / burn fBTC (Cardano)
 
 <!-- G28 superseded 2026-08-05 (rev 5.1, attested-root redesign): permissionless completion via a

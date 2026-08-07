@@ -551,6 +551,35 @@ PegInRequest.
 > satoshi amount. A wrong value is self-limiting, because the first TM built from
 > it produces a transaction the quorum cannot make balance.
 
+*Implementation status* (2026-08-07). [BSS-1], [BSS-2], [BSS-4] to [BSS-7] are
+implemented in `onchain/validators/bitcoin/bridge-state.ak`. `BridgeState` is in
+`onchain/lib/bifrost/types/bridge-state.ak`.
+`onchain/validators/bitcoin/completed-peg-outs-merkle-tree.ak` is deleted: the
+singleton replaces the rev-5.1 CPO trie UTxO. `completed_peg_outs_root_asset_name`
+stays in `constants.ak` until `peg-out.ak` stops reading it.
+
+Decisions taken during implementation:
+
+- **Four datum fields, not five.** The prose above says "five flat primitives"
+  once and names a federation sweep txid once. The normative Aiken block and the
+  field table both list four. The implementation follows the normative block. The
+  rejected alternative was a fifth `federation_sweep_txid` field, which no check
+  in this document reads.
+- **[BSS-2] reads the redeemer tag, not a decoded type.** The validator calls
+  `builtin.un_constr_data` and compares the tag against a named constant. The
+  rejected alternative was to import the Scalus `TmSpendRedeemer` shape as an
+  Aiken type. That would add a second datum mirror to keep in lockstep, which
+  §Deleting the Aiken TM datum mirror removes.
+- **[BSS-5] pins the payment credential only.** The output check accepts any
+  stake credential on the singleton's own address. The rejected alternative was
+  the full-address pin `stake_credential: None` used by the deleted CPO trie
+  mint. [BSS-5] says "own script address", and a staked singleton address is not
+  a security difference: the NFT plus the payment credential already fix where
+  the token lands.
+- **[BSS-1] fails hard on two TM inputs.** The filter result is destructured with
+  `expect [tm_input]`. The rejected alternative, returning `False` on a count
+  mismatch, hides the two-input case behind the same failure as a wrong redeemer.
+
 ### Complete peg-in
 
 - [CPI-1] WITHDRAWN. No `Confirmed` record is referenced.

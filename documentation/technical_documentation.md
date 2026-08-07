@@ -3968,18 +3968,24 @@ All SPOs independently construct the same Treasury Movement (TM) transaction fro
 
 A peg-out in the frozen batch is **skipped** — excluded from the outputs, never aborting the
 TM — iff any of the following holds: its datum does not decode as `PegOutDatum`; its destination
-`scriptPubKey` is unparseable; its locked fBTC amount is below `min_peg_out_fbtc` at the batch
-snapshot slot; its datum `per_pegout_fee` is **below the Operational-params
-floor** at the batch snapshot slot; its net payout `amount − datum.per_pegout_fee` is below
-Bitcoin dust (330 sat); or it fails the **fulfillment freshness filter**: `datum.created > now`
+`scriptPubKey` is unparseable; its `por_id` is **already recorded in the completed-peg-outs
+trie**; its `por_id` **already appeared earlier in this same batch**; its locked fBTC amount is
+below `min_peg_out_fbtc` at the batch snapshot slot; its datum `per_pegout_fee` is **below the
+Operational-params floor** at the batch snapshot slot; its net payout
+`amount − datum.per_pegout_fee` is below Bitcoin dust (330 sat); or it fails the **fulfillment freshness filter**: `datum.created > now`
 (the request is not yet valid) OR `datum.created + peg_out_cancel_timeout_ms − now < margin`
 (too close to its own Cancel deadline — a heimdall-configured value, default 7 days, bounding the
 signed-but-not-yet-confirmed race: a TM that includes a peg-out too close to its cancel window
 could confirm just after the owner cancels, stranding the payment). The floor, `min_peg_out_fbtc`,
 and the freshness margin are read at the batch snapshot slot, so every SPO computes the identical
-skip set. Skipped peg-outs remain on-chain; their owners recover via *Cancel PegOut request* once
-this TM confirms and the timeout elapses. Without this rule a single 1-satoshi peg-out would make
-the whole TM unbuildable — the skip rule, not any creation-time check, is the bridge's defense
+skip set. The two `por_id` conditions are what make fulfillment **once-only**: the trie insert is
+idempotent, so a second payment for a `por_id` the trie already holds — whether recorded by an
+earlier TM or repeated within this batch — moves treasury BTC that no root change accounts for,
+and is provable by nobody. They are consensus conditions like the rest: an SPO whose trie
+disagrees builds different TM bytes, which is why every co-signer independently recomputes the
+committed root before signing (see *Post signed TM*). Skipped peg-outs remain on-chain; their
+owners recover via *Cancel PegOut request* once this TM confirms and the timeout elapses.
+Without this rule a single 1-satoshi peg-out would make the whole TM unbuildable — the skip rule, not any creation-time check, is the bridge's defense
 against that.
 
 **Amounts and fees.**

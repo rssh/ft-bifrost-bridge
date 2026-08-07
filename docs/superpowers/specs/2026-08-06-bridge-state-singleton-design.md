@@ -656,12 +656,34 @@ days, mirroring `peg_out_cancel_timeout_ms`.
 Every other rule is unchanged: value-bound membership at Complete,
 non-membership and timeout at Cancel.
 
-### Update-Y, federation reset
+### Update-Y, federation branch
 
-- [UY-5] to [UY-8] WITHDRAWN. `treasury.ak` MUST NOT carry a `FederationReset`
-  spend branch. See §No dead-roster recovery.
-- [UY-9], [UY-10] NEVER ISSUED. An earlier draft used them to relocate the
-  evidence into the singleton instead of removing the branch.
+- [UY-5] REVISED. `treasury.ak` MUST accept an Update-Y authorized by a BIP340
+  signature under the spent datum's `y_federation`, in place of [UY-3]'s
+  signature under `current_spos_frost_key`.
+- [UY-6] WITHDRAWN. The federation MAY name any key.
+- [UY-7], [UY-8] WITHDRAWN with the `FederationReset` branch. No sweep evidence
+  and no freshness anchor are required.
+- [UY-9], [UY-10] NEVER ISSUED. An earlier draft used them to relocate that
+  evidence into the singleton instead of removing it.
+- Every other Update-Y rule is unchanged. The branch differs only in whose
+  signature authorizes it.
+
+> **Why [UY-6] is not worth keeping.** It restricted the federation to setting
+> `y_federation` itself. That is trivially bypassed in two transactions: set
+> `current_spos_frost_key` to `y_federation`, then sign the next rotation as the
+> current key and name anything. The restriction buys one transaction of delay,
+> not a bound.
+
+> **Why there is no timeout.** A timeout would make this a dead-man switch rather
+> than a standing authority, but it needs an anchor that tracks whether the
+> roster can still sign. `last_rotation` does not: a live roster whose DKG merely
+> fails stops rotating and becomes indistinguishable from a dead one, so two idle
+> epochs would let the federation demote a roster that is signing batches
+> perfectly well. Fixing that needs either a mandatory no-op rotation from the
+> roster or a liveness field on the singleton, and both belong to the key
+> lifecycle design rather than to this revision. See §Federation co-authority for
+> what the absence of a timeout actually grants.
 
 ## Off-chain rules
 
@@ -764,7 +786,7 @@ What stays:
 |---|---|---|
 | Complete peg-in [CPI-2], [CPI-3] | `Confirmed` record | singleton `spi_root` |
 | Leader reward [CPI-7] | `Confirmed` record's poster and pinned amount | nothing, WITHDRAWN and deferred |
-| `treasury.ak::FederationReset` [UY-7], [UY-8] | `Confirmed` record | nothing, the branch is REMOVED |
+| `treasury.ak::FederationReset` [UY-7], [UY-8] | `Confirmed` record | nothing, the branch is REMOVED and [UY-5] replaces it |
 | Post signed TM [PTM-5] | predecessor `Confirmed` record | singleton head |
 | Treasury reconstruction | tip record's parsed `outputs[0]` | singleton `treasury_amount` |
 | Leader election entropy | tip `btc_txid` | singleton head |
@@ -778,8 +800,8 @@ What stays:
 | frontend `claim.ts` payout discovery | `Confirmed.fulfilled_peg_outs` | singleton `cpo_root` |
 | Complete peg-out, Cancel | singleton root | unchanged, but see [CPO-13] |
 
-`FederationReset` is removed rather than relocated. See §No dead-roster
-recovery.
+`FederationReset` is removed rather than relocated. [UY-5] covers the case it
+existed for, without evidence. See §Federation co-authority.
 
 ## Recovery: replacing the singleton
 
@@ -953,44 +975,40 @@ first.
 > `FederationReset` permanently. Every other contract in this design is
 > replaceable through a Config field. These two are not.
 
-## No dead-roster recovery
+## Federation co-authority
 
-`FederationReset` is removed, and nothing replaces it in this revision. That is
-a deliberate, recorded gap, not an oversight.
+[UY-5] makes the federation a **standing co-authority** over the treasury key,
+not an emergency fallback. It may rotate `current_spos_frost_key` at any moment,
+to any value, without proving anything about the roster.
 
-**What still works.** The Bitcoin federation CSV leaf is untouched. If the roster
-dies, the federation can still sweep the treasury once it has aged past
-`federation_csv_blocks`, so user funds remain recoverable under the federation
-charter.
+That is the whole dead-roster recovery: if the roster dies, the federation
+rotates and the bridge continues. No sweep evidence, no freshness anchor, no
+timeout, no field on the singleton.
 
-**What does not.** `current_spos_frost_key` can only be rotated by a signature
-under itself ([UY-3]). A permanently dead roster therefore freezes it. No new key
-can be installed, no new TM can be signed, and every new deposit derives to an
-address nobody can spend. Recovery is deploying a new bridge instance.
+**What it grants that the federation did not already have.** The federation can
+already sweep any treasury UTxO once it has aged past `federation_csv_blocks`,
+so it can already take every satoshi, slowly and visibly on Bitcoin. [UY-5] adds
+speed and quiet: a rotation is instant, and afterwards new deposits derive to the
+federation's address while depositors see nothing unusual.
 
-- [FED-1] Operators MUST NOT run this revision on a network holding value that
-  the federation charter does not already cover.
-- [FED-2] The key lifecycle MUST be designed before mainnet.
+- [FED-1] Operators MUST NOT run this revision on a network holding value the
+  federation charter does not already cover.
+- [FED-2] The key lifecycle MUST be designed before mainnet, and MUST replace
+  this standing authority with a timeout-gated one.
+- [FED-3] The federation charter MUST state that the federation can rotate the
+  treasury key unilaterally and immediately.
 
-> **Why remove it rather than relocate it.** Keeping the branch costs a datum
-> field on the singleton, two Confirm checks to write and carry it, a witness
-> shape computation on every TM, and a `tm_nft_policy_id` parameter on
-> `treasury.ak` that permanently couples it to the TM validator's hash. All of
-> that serves an event that happens at most once per dead roster, through a
-> mechanism a review found to be the wrong shape anyway: proving deadness by a
-> Bitcoin sweep, rather than by the roster's inability to sign.
+> **Why accept it here.** The alternative was proving the roster dead through a
+> Bitcoin CSV sweep recorded at TM Confirm, which cost a datum field on the
+> singleton, two Confirm checks, a witness-shape computation on every TM, and a
+> `tm_nft_policy_id` parameter permanently coupling `treasury.ak` to the TM
+> validator's hash. All of that for an event that happens at most once per dead
+> roster, using deadness evidence that was a proxy for the thing that matters:
+> whether the roster can still produce a threshold signature.
 >
-> `2026-08-07-key-lifecycle-design.md` sketches the replacement, authorizing the
-> federation on a timeout. It is postponed with known defects. Removing the old
-> branch now means the replacement arrives as one coherent design instead of
-> being retrofitted around evidence plumbing this revision would otherwise have
-> shipped.
-
-> **What this deletes from the code.** `spent_via_federation_leaf` and its
-> `isValidScriptPathWitness` computation leave the TM validator entirely.
-> `last_reset_tm_txid` leaves `TreasuryDatum`. `treasury.ak` loses its
-> `FederationReset` branch and its `tm_nft_policy_id` parameter, and with them
-> its last read of anything the bridge owns.
+> [UY-5] costs one check and reads `y_federation` from `treasury.ak`'s own datum,
+> so `treasury.ak` keeps its single `registry_policy_id` parameter and stays
+> uncoupled from everything else in this design.
 
 ## Cost
 

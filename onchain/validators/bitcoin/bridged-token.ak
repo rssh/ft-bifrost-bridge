@@ -20,8 +20,9 @@ pub type MintRedeemer {
 //the stable fSAT policy id (ConfigDatum field 1). It authorizes a mint (qty>0)
 //by requiring the peg-in withdraw script to run, and a burn (qty<0) by
 //requiring the peg-out withdraw script; those validators constrain the mint
-//amount on every action (peg completion pins it; Cancel forbids it). This
-//policy adds the single-asset-name guard and the config[1]==policy_id anchor.
+//amount on every action (peg completion pins it; Close and Cancel forbid it).
+//This policy adds the single-asset-name guard and the config[1]==policy_id
+//anchor.
 validator bridged_token(
   configNFTPolicyId: ByteArray,
   configNFTAssetName: ByteArray,

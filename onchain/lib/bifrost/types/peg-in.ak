@@ -13,12 +13,13 @@ pub type PegInDatum {
   source_chain_peg_in_raw_tx_index: Int,
   //Utxo ID of the PegIn in the Taproot address
   peg_in_utxo_id: ByteArray,
-  //The utxo id of the Treasury on the source chain
-  source_chain_treasury_utxo_id: ByteArray,
   //Amount of tokens to PegIn
   peg_in_amount: Int,
   //Pubkey used by the user to start the PegIn on the source chain
   user_source_chain_pub_key: ByteArray,
+  //POSIX ms creation time, pinned by the mint handler to the mint
+  //transaction's validity upper bound. spec [CLR-7]
+  created: Int,
 }
 
 pub type PegInRequest {
@@ -38,12 +39,42 @@ pub type PegInMintRedeemer {
   new_peg_in_request: PegInRequest,
 }
 
+//The two mutually exclusive proof branches of Close. spec §Close PegInRequest:
+//a PIR is permanently dead either because its deposit was never swept, or
+//because the deposit was already swept and minted (a duplicate request).
+//[CLR-3]/[CLR-4] are withdrawn: no verifier script, no Bitcoin witness parsing.
+pub type ClosePegInProof {
+  //Never swept: the deposit is absent from the singleton's spi_root and the
+  //close timeout has elapsed. spec [CLR-5]/[CLR-6]
+  NeverSwept {
+    //Index of the bridge state singleton reference input, authenticated by
+    //the NFT (bridge_state_policy, "BSS")
+    bridge_state_ref_input_index: Int,
+    //Non-membership proof of peg_in_utxo_id in the singleton's spi_root
+    spi_exclusion_proof: mpf.Proof,
+  }
+  //Duplicate: the deposit WAS swept and already minted, so this request can
+  //never complete. No timeout. spec [CLR-8]
+  Duplicate {
+    //Index of the CPI trie reference input, authenticated by the NFT
+    //(completed_peg_ins_policy, "CPI")
+    completed_peg_ins_ref_input_index: Int,
+    //The sweeping TM's input-0 outpoint, 36 bytes: the CPI trie value for
+    //peg_in_utxo_id (spec §The two deposit tries)
+    sweeping_tm_input_0: ByteArray,
+    //Membership proof of (peg_in_utxo_id -> sweeping_tm_input_0)
+    cpi_membership_proof: mpf.Proof,
+  }
+}
+
 pub type ActionType {
-  // Close a peg-in request via its owner_auth. NOTE: a fully spec-faithful peg-in cancellation
-  // (F4/F5: the creator closes the PIR after the depositor reclaims the BTC on the Bitcoin side via
-  // the Taproot CSV refund leaf, gated on a refund-script witness proof) is part of the unbuilt
-  // failure-mode milestone — see documentation/{technical_documentation,formal_verification}.md.
-  Cancel { burnt_peg_in_nft_asset_name: AssetName }
+  //Close a permanently dead peg-in request, authorized by the datum's
+  //owner_auth ([CLR-9]), burning the PIR NFT ([CLR-10]) and moving no fBTC
+  //([CLR-11]). The proof selects the branch: NeverSwept or Duplicate.
+  Close {
+    burnt_peg_in_nft_asset_name: AssetName,
+    proof: ClosePegInProof,
+  }
   // Rev 5.4: completion proves the sweep against the bridge state singleton, referenced by index
   // and authenticated by the NFT (bridge_state_policy, "BSS") — no Confirmed TM record exists any
   // more. spec [CPI-9]: the singleton's spi_root maps peg_in_utxo_id to the sweeping TM's input-0

@@ -1371,11 +1371,11 @@ These are the steps to execute a correct peg-in:
 * Wait for the peg-in to be included in the Treasury Movement transaction at the next epoch boundary. In the normal 51% mode, SPOs sign this transaction with FROST and post it to Cardano (`TreasuryMovementValidator`); in the emergency mode, the federation satisfies the $Y_{federation}$ fallback script path instead. Watchtowers then relay the signed transaction to Bitcoin.
 * Once the Treasury Movement transaction is confirmed on Bitcoin, the depositor completes the peg-in on Cardano. The depositor spends the PegInRequest UTxO, references the corresponding `Confirmed TM tx` UTxO, and provides a non-membership proof against the completed-peg-ins trie plus a **BIP-322** signature under the beacon's `Q_auth`. The validator parses the raw TM to verify the deposit was actually swept, and parses the raw peg-in transaction from the PegInRequest datum to check the deposit data (the only point where the peg-in transaction is parsed on-chain). This mints the correct amount of fBTC to the Cardano address the depositor chooses and inserts the peg-in into the completed-peg-ins trie. Full checks: *Complete peg-in* ([CPI-1]…[CPI-8]).
 * If the peg-in was not included in the Treasury Movement transaction (e.g., it arrived too late in the epoch), it rolls over to the next epoch. If the Treasury key has rotated and the peg-in can no longer be swept, the depositor reclaims their BTC via the depositor refund leaf (~30 days) and can retry with the new Treasury address.
-* **PegInRequest closure**: the creator can close a PegInRequest UTxO (burn the NFT, reclaim the min_utxo ADA) under two conditions:
-  * **After depositor timeout reclaim**: a Binocular-confirmed Bitcoin transaction spends the deposit via the **depositor refund leaf** — not the key path (an SPO sweep) and not the federation leaf (also a legitimate sweep). The validator parses the transaction witness to verify this. Closure therefore cannot grief a depositor whose funds were legitimately swept.
-  * **Duplicate PegInRequest**: a **trie membership proof** shows the peg-in is already in the completed-peg-ins trie. fBTC was already minted via another PegInRequest for the same deposit, so this one is redundant.
+* **PegInRequest closure**: the creator can close a PegInRequest UTxO (burn the NFT, reclaim the min_utxo ADA) under two conditions, both proven by MPF proofs — no Bitcoin parsing, and no verifier script:
+  * **Never swept**: a **non-membership proof** shows the deposit is absent from the bridge state singleton's swept-peg-ins trie, and the 30-day grace period since the request's `created` has passed. A deposit that was never taken into the treasury can never owe fBTC — including one the depositor reclaimed through the Taproot refund leaf. Closure therefore cannot grief a depositor whose funds were legitimately swept.
+  * **Duplicate PegInRequest**: a **trie membership proof** shows the peg-in is already in the completed-peg-ins trie. fBTC was already minted via another PegInRequest for the same deposit, so this one is redundant. No timeout applies.
 
-  Full checks: *Close PegInRequest* ([CLR-1]…[CLR-4]).
+  Full checks: *Close PegInRequest* ([CLR-5]…[CLR-11]).
 
 ### End-to-end peg-in sequence
 
@@ -1753,17 +1753,38 @@ order is normative); the previous 2-field table disagreed with the fields §Comp
 
 | # | Field | Type | Purpose |
 |---|-------|------|---------|
-| 0 | `owner_auth` | `AuthorizationMethod` | authority that can later `Cancel` (close) this request |
+| 0 | `owner_auth` | `AuthorizationMethod` | authority that can later `Close` this request ([CLR-9]) |
 | 1 | `source_chain_peg_in_raw_tx` | `ByteArray` | raw (witness-stripped) BTC peg-in deposit tx bytes |
 | 2 | `source_chain_peg_in_raw_tx_index` | `Int` | the deposit tx's index in its block (for the Merkle proof) |
-| 3 | `peg_in_utxo_id` | `ByteArray` (txid ‖ vout LE) | the deposit outpoint on Bitcoin — the UTxO the TM sweeps; key of the completed-peg-ins trie |
-| 4 | `source_chain_treasury_utxo_id` | `ByteArray` | the treasury outpoint current when the request was created — identifies the key era the deposit address was derived against (used by SPO off-chain address reconstruction) |
-| 5 | `peg_in_amount` | `Int` (satoshi) | the deposit amount — the fBTC quantity minted at completion |
-| 6 | `user_source_chain_pub_key` | `ByteArray` (32 B x-only) | the depositor's auth key — the beacon's `Q_auth`, the key the BIP-322 completion signature verifies under |
+| 3 | `peg_in_utxo_id` | `ByteArray` (txid ‖ vout LE) | the deposit outpoint on Bitcoin — the UTxO the TM sweeps; key of both deposit tries |
+| 4 | `peg_in_amount` | `Int` (satoshi) | the deposit amount — the fBTC quantity minted at completion |
+| 5 | `user_source_chain_pub_key` | `ByteArray` (32 B x-only) | the depositor's auth key — the beacon's `Q_auth`, the key the BIP-322 completion signature verifies under |
+| 6 | `created` | `Int` (POSIX ms) | mint-time creation time. Starts the *Close PegInRequest* never-swept grace period ([CLR-5]); pinned by the mint handler ([CLR-7]) |
 
-Fields 3–6 are **bound to the real deposit at mint time** by the `deposit_binding_ok` check below —
+Fields 3–5 are **bound to the real deposit at mint time** by the `deposit_binding_ok` check below —
 that binding is what later makes the depositor (not a watchtower) the only party able to claim the
 fBTC (see the B1 note under *Complete peg-in*).
+
+> **Implementation status (rev 5.4).** The table above is the deployed
+> `bifrost/types/peg-in.ak` constructor order. Two changes from rev 5.1:
+>
+> * `created` is **appended**, not inserted, so the deposit-binding fields keep their indices and
+>   the mint-side reasoning above is unchanged.
+> * `source_chain_treasury_utxo_id` is **removed**. It pinned the treasury outpoint that was
+>   current at request time, for the rev-5.1 close branch and for SPO address reconstruction. No
+>   validator ever read it, [CLR-3] that motivated it is withdrawn, and the SPO derives the key era
+>   from the beacon's `D` plus the treasury state. Rejected alternative: keep the field as a
+>   reserved slot. That costs ~36 B in every request datum forever to preserve a field nothing
+>   reads. This is a fresh deployment, so there is no migration to protect.
+
+> **Why `created` is mint-pinned and `PegOutDatum.created` is not.** The peg-out one is
+> requester-set, because the requester only harms themselves by backdating their own cancel
+> deadline. Here the request creator and the depositor can be different parties: a watchtower
+> creates a PIR, and the depositor holds the fBTC claim. A requester-set `created` would let the
+> creator backdate it and close the request immediately, before the depositor could complete it.
+> [CLR-7] therefore pins `created` to the mint transaction's validity upper bound, the same
+> device the TM record uses ([PTM-4]). The upper bound is the earliest time the chain can prove
+> the request did not already exist, so `created` can never be earlier than the truth.
 
 > **Implementation status.** The deployed mint redeemer carries **one** request per transaction
 > (`new_peg_in_request`, singular); the batch form (a list of up to ~10, per the size analysis
@@ -2377,7 +2398,7 @@ flowchart LR
 complete.
 
 **Who**: the request's creator — per the datum's `owner_auth`.
-**Trigger**: either **(a)** the depositor reclaimed the deposit on Bitcoin via the refund leaf, or
+**Trigger**: either **(a)** the deposit was never swept and the grace period has passed, or
 **(b)** the fBTC was already minted through another PegInRequest for the same deposit.
 
 **Structure**
@@ -2385,30 +2406,83 @@ complete.
 | Role | Content |
 |------|---------|
 | **Inputs** | PegInRequest UTxO; creator UTxO (fees) |
-| **Reference inputs** | branch (a): Binocular Oracle; branch (b): completed-peg-ins trie UTxO |
+| **Reference inputs** | Config UTxO; branch (a): the bridge state singleton; branch (b): the completed-peg-ins trie UTxO |
 | **Mint** | −1 PegInRequest NFT |
 | **Outputs** | MIN_ADA → creator; change |
-| **Witness data (redeemer)** | branch selector + the branch's proof (below) |
+| **Witness data (redeemer)** | `Close { burnt_peg_in_nft_asset_name, proof }`, where `proof` is `NeverSwept` or `Duplicate` |
+| **Validity interval** | branch (a): finite `invalid_before` REQUIRED, strictly after `created + peg_in_close_timeout_ms`. Branch (b): unconstrained |
 | **Required signers** | per `owner_auth` |
 
-**Checks enforced on-chain** (`peg-in.ak` spend, `Cancel` action)
+**Checks enforced on-chain** (`peg-in.ak` withdraw, `Close` action)
 
-* **[CLR-1]** `peg-in.ak` MUST verify closure is authorized per the datum's `owner_auth`.
-* **[CLR-2]** `peg-in.ak` MUST verify the PegInRequest NFT is burned.
-* **[CLR-3]** **Branch (a) — deposit refunded**: `peg-in.ak` MUST verify a Binocular-confirmed Bitcoin transaction spends
-  `peg_in_utxo_id` via the **depositor refund leaf** — the witness is parsed to verify a
-  script-path spend of that specific leaf (not the key path, which would be an SPO sweep, and not
-  the federation leaf — both legitimate sweeps). This is what makes closure unable to grief a
-  depositor whose funds were actually swept.
-* **[CLR-4]** **Branch (b) — duplicate**: `peg-in.ak` MUST verify a trie membership proof showing `peg_in_utxo_id` is already in the
-  completed-peg-ins trie — fBTC was already minted via another request; this one is redundant.
+Branch (a), never swept, needs [CLR-5] **and** [CLR-6]. Branch (b), duplicate, needs [CLR-8]
+**alone**. [CLR-9] to [CLR-11] apply to both.
 
-> **Implementation status.** The implemented `Cancel` action gates on a withdrawal from the
-> configured peg-in close verifier (Config #6), the PegInRequest NFT being present in the input and
-> burnt, and no bridged token being minted in the same transaction. It does *not* check `owner_auth`
-> — that delegation was replaced by the embedded depositor authorization on the completion path. The
-> per-condition branch gating above is the normative target; today the close verifier is a dummy
-> hash with no reward account, so Cancel is cleanly unsatisfiable until one is deployed.
+* **[CLR-5]** `peg-in.ak` MUST verify the transaction's validity range lies entirely after
+  `created + peg_in_close_timeout_ms`.
+* **[CLR-6]** `peg-in.ak` MUST verify `mpf.miss(spi_root, peg_in_utxo_id, proof)` against the
+  bridge state singleton reference input, authenticated by the NFT (`bridge_state_policy`, `"BSS"`)
+  and decoded as a `BridgeState` **by field name** ([LIB-1]).
+* **[CLR-7]** `peg-in.ak` MUST verify, at mint time, that the new `PegInDatum`'s `created` equals
+  the mint transaction's validity upper bound exactly, which MUST be finite.
+* **[CLR-8]** `peg-in.ak` MUST accept, as an alternative to [CLR-5] and [CLR-6],
+  `mpf.has(cpi_root, peg_in_utxo_id, value, proof)` against the completed-peg-ins trie reference
+  input, authenticated by the NFT (`completed_peg_ins_policy`, `"CPI"`). `value` is the sweeping
+  TM's input-0 outpoint (see *The two deposit tries*), supplied in the redeemer.
+* **[CLR-9]** `peg-in.ak` MUST verify the close is authorized by the datum's `owner_auth`.
+* **[CLR-10]** `peg-in.ak` MUST verify the PegInRequest NFT is burned — quantity −1 under the
+  peg-in policy for the input's asset name.
+* **[CLR-11]** `peg-in.ak` MUST verify the transaction mints and burns no fBTC — quantity 0 under
+  (`bridged_token_policy`, `"fSAT"`).
+* **[CLR-1]**, **[CLR-2]** — renumbered, not withdrawn: [CLR-9] restates [CLR-1] and [CLR-10]
+  restates [CLR-2].
+* **[CLR-3]** ~~Branch (a) MUST verify a Binocular-confirmed Bitcoin transaction spends
+  `peg_in_utxo_id` via the depositor refund leaf.~~ — **Withdrawn (rev 5.4)**. [CLR-5] and [CLR-6]
+  replace it.
+* **[CLR-4]** ~~Branch (b) MUST verify a trie membership proof against the completed-peg-ins
+  trie.~~ — **Withdrawn (rev 5.4)**. [CLR-8] replaces it, with the value binding [CLR-4] lacked.
+
+`peg_in_close_timeout_ms` is a `peg-in.ak` constant of `2_592_000_000` — thirty days, mirroring
+`peg_out_cancel_timeout_ms`.
+
+> **Why the non-membership carries the safety and the timeout does not.** [CLR-6] is what makes a
+> close unable to grief a depositor: a swept deposit is in `spi_root` and no exclusion proof for it
+> can ever be built again. The only gap is the window between a sweep confirming on Bitcoin and its
+> TM confirming on Cardano, where the deposit is swept but not yet in `spi_root`. That window is
+> not dangerous, because closing a PIR is **not destructive** — creating one is permissionless and
+> needs only the deposit proof, so a request closed in that window is simply re-created and
+> completed. [CLR-5] exists to make that churn rare, not to make the rule safe.
+
+> **Why [CLR-5]'s clock does not match the Bitcoin refund timeout, and must not try.** The
+> deposit's refund leaf uses `refund_timeout`, measured in Bitcoin BLOCKS from the deposit's own
+> confirmation. [CLR-5] measures POSIX milliseconds from PIR creation on Cardano, and a PIR may be
+> created long after its deposit. The two clocks have different units and different anchors, so
+> agreement is impossible. It is also unnecessary: [CLR-6], not the timeout, establishes deadness.
+
+> **Why the duplicate branch has no timeout.** [CLR-8] proves the deposit already minted. Nothing
+> that happens later can revive the request, so waiting thirty days would only lock MIN_ADA for no
+> gain. This is why [CLR-8] is an *alternative* to [CLR-5]+[CLR-6], not an addition.
+
+> **Implementation status (rev 5.4).** All of [CLR-5] to [CLR-11] are implemented in
+> `onchain/validators/bitcoin/peg-in.ak`, and each check cites its ID in a `// spec [CLR-n]`
+> comment. Decisions worth recording:
+>
+> * **The close verifier script is gone**, together with its Config field (rev 5.1's #6) and the
+>   F1–F6 close milestone's on-chain work. Rev 5.1 needed a separate script only because [CLR-3]
+>   had to parse a Bitcoin witness and disambiguate which Taproot leaf was revealed. Under [CLR-6]
+>   the question is not "did the depositor refund" but "was this deposit ever swept", which the SPI
+>   trie answers directly. Rejected alternative: keep the verifier for the refund case. It would
+>   duplicate, in Bitcoin parsing, a strictly weaker version of what an MPF non-membership proof
+>   already proves — a refunded deposit is by definition unswept, so [CLR-6] covers it.
+> * **[CLR-8] binds the trie VALUE**, not only the key. Withdrawn [CLR-4] proved membership alone.
+>   Binding the value keeps the CPI trie's contract identical on both readers (*Complete peg-in*
+>   inserts that value, Close reads it back), so a future divergence in what the trie stores
+>   fails loudly here instead of silently accepting.
+> * **Both branches locate their reference input by redeemer index**, then authenticate it by NFT.
+>   Rejected alternative: scan `reference_inputs` for the NFT. The scan costs O(reference_inputs)
+>   and would silently pick a different UTxO if one ever matched, whereas a wrong index traps.
+> * The bridge state policy is read from Config at runtime ([PAR-1]), so `peg-in.ak` needs no new
+>   validator parameter and no address change when the singleton policy rotates.
 
 <!-- G2 (revised 2026-07-15; superseded 2026-07-17): the tunables were moved out of the Config
      into their own singleton, then merged back in when update_auth governance landed. Updates
@@ -4427,7 +4501,7 @@ Beyond maintaining general Bitcoin state, watchtowers perform specialized duties
 * Once a peg-in transaction reaches the required confirmation threshold (100 Bitcoin blocks plus 200 minutes of Binocular challenge period), watchtowers create a PegInRequest UTxO on Cardano (peg-in.ak) by:
   * Minting a PegInRequest NFT.
   * Providing a transaction inclusion proof consisting of: the raw Bitcoin transaction data, a Merkle proof linking the transaction to the block's Merkle root, and an inclusion proof of the confirmed block in the Binocular Oracle.
-  * Setting the datum with: the creator's `owner_auth` (for PegInRequest closure authorization), the raw Bitcoin peg-in transaction bytes, and the deposit-binding fields — the deposit outpoint, amount, depositor key, and the current treasury outpoint (the full `PegInDatum`, see the Transaction catalog).
+  * Setting the datum with: the creator's `owner_auth` (for PegInRequest closure authorization), the raw Bitcoin peg-in transaction bytes, and the deposit-binding fields — the deposit outpoint, amount and depositor key, plus `created` (the full `PegInDatum`, see the Transaction catalog). The watchtower MUST set `created` to the transaction's validity upper bound, or the mint fails ([CLR-7]).
 * The on-chain `peg-in.ak` validator verifies the Binocular inclusion proof and confirmation depth (100 Bitcoin blocks + challenge period) but does not parse the Bitcoin transaction. SPO programs parse the raw transaction off-chain to extract deposit data (txid, vout, amount, the beacon keys, Taproot output key $Q$) and validate it before including the peg-in in the Treasury Movement transaction. The raw peg-in transaction is parsed on-chain only at mint time to bind the beacon keys, outpoint, and amount (`deposit_binding_ok`). Taproot address correctness is **not** verified on-chain (Plutus V3 lacks secp256k1 point arithmetic builtins); instead, SPOs verify off-chain (see **Taproot address verification**).
 
 **Treasury Movement Relay**
@@ -4531,6 +4605,8 @@ Bifrost's watchtower design relies on a minimal trust assumption: only one hones
 | `per_pegout_fee` (effective) | each `PegOutDatum` | pinned at lock time | TM builder (skip rule, output amount); *Complete peg-out*'s value-bound membership proof ([CPO-12]) |
 | `created` (POR) | each `PegOutDatum` | requester-set at lock time | TM builder's fulfillment freshness filter; *Cancel PegOut request*'s timeout check ([CXL-7]) |
 | `peg_out_cancel_timeout_ms` | `peg-out.ak` validator constant (`2_592_000_000`, 30 days) | fixed per deployed script — changeable only by a `peg-out.ak` swap via Config Update (field 5) | *Cancel PegOut request* ([CXL-7]) |
+| `created` (PIR) | each `PegInDatum` | **mint-pinned** to the mint tx's validity upper bound ([CLR-7]) — not requester-set, unlike the POR one | *Close PegInRequest*'s never-swept timeout ([CLR-5]) |
+| `peg_in_close_timeout_ms` | `peg-in.ak` validator constant (`2_592_000_000`, 30 days) | fixed per deployed script — changeable only by a `peg-in.ak` swap via Config Update | *Close PegInRequest* ([CLR-5]) |
 | fulfillment freshness margin (default 7 days) | heimdall config (off-chain, not on-chain) | operator-tunable, no Config field | SPO TM builder's skip rule |
 | `leader_reward` (effective) | each TM record datum | pinned at post time | `bridged-token.ak` mint check |
 | `y_federation`, `federation_csv_blocks` | Treasury state datum #2–3 | per-instance constants (rotatable via the Update-Y federation variant) | address derivation; CSV leaves; federation reset |

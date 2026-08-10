@@ -797,8 +797,11 @@ inert field, so the datum shape and its off-chain readers are undisturbed.
   and the proposed TM's inputs before signing.
 - [SPI-3] heimdall MUST give every entry a TM adds that TM's own input-0
   outpoint as its value. One TM's entries therefore all share one value.
-- [SPI-4] heimdall and binocular MUST serve a swept peg-ins membership proof to
-  any caller.
+- [SPI-4] REVISED. binocular MUST serve a swept peg-ins membership proof to any
+  caller. heimdall MUST NOT be the proof server.
+- [SPI-6] binocular MUST derive the swept set by walking the Bitcoin treasury
+  chain, and MUST reconcile it against the singleton's confirm history before
+  serving a proof.
 - [SPI-5] PARKED with [CPI-11]. It would require heimdall to set every entry's
   `leader_credential` from the leader election, and a participant whose own
   election result disagrees to refuse to sign.
@@ -812,10 +815,36 @@ inert field, so the datum shape and its off-chain readers are undisturbed.
 > with no selection freedom. Any observer can recompute it from Bitcoin data
 > alone, so the attestation is deterministically auditable.
 
-> **Why [SPI-4].** A depositor cannot build a membership proof without the whole
-> trie, and the trie is reconstructible only from full chain history. The
-> depositor-facing path is the frontend, which builds transactions client-side
-> and has no such capability today. See §Off-chain: frontend.
+> **Why [SPI-4] names the watchtower and not the SPO program.** A depositor
+> cannot build a membership proof without the whole trie, and the frontend builds
+> transactions client-side with no such capability. Something must serve it, and
+> three things make that binocular:
+>
+> Watchtowers run Bitcoin nodes and SPOs deliberately do not, per rev 5.1's
+> infrastructure assumptions, so a Bitcoin-derived reconstruction sits naturally
+> in one and awkwardly in the other. binocular already does the work, keeping a
+> trie mirror for the POR sweeper and owning the reconstruction path. And
+> heimdall builds the trie for a different purpose entirely, [SPI-2]'s
+> recomputation before signing, which is a quorum-internal check. Making the SPO
+> program a user-facing API would conflate the signing set with the service
+> layer.
+
+> **Why [SPI-6], and why serving proofs needs no trust.** The treasury is a linear
+> spend chain: each TM spends the previous TM's output 0, and the commitment
+> output identifies it as a protocol TM. Walking that chain and taking every input
+> except input 0 yields the swept set from Bitcoin alone.
+>
+> Bitcoin alone is not sufficient, though. It reports what was SWEPT, while
+> `spi_root` only advances at Confirm on Cardano. A Bitcoin-only view is therefore
+> a superset whose extra entries would produce proofs that fail until their TM
+> confirms. Reconciling against the singleton's history is bookkeeping, not a
+> second data source.
+>
+> No trust is involved either way. Every proof is verified on-chain against the
+> attested root, so a wrong one simply fails `mpf.has`. Rev 5.1 settled the same
+> question for Cancel proofs: non-SPO users MAY use any provider. Anyone may run
+> this service, and a determined client could reconstruct the trie itself from
+> Cardano alone, at the cost of round trips growing with chain length.
 
 ## Trust model change
 
@@ -1024,7 +1053,7 @@ earlier blast-radius analysis.
   the user's wallet.
 - [OF-2] `claim.ts` MUST reference the singleton in place of the `Confirmed`
   record, and MUST stop reading a hard-coded TM NFT policy.
-- [OF-3] `claim.ts` MUST obtain a [CPI-9] membership proof. [SPI-4] names the
+- [OF-3] `claim.ts` MUST obtain a [CPI-9] membership proof from binocular. [SPI-4] names the
   servers; the frontend has no reconstruction capability of its own.
 - [OF-4] Peg-out payout discovery MUST move from `Confirmed.fulfilled_peg_outs`
   to `cpo_root`.

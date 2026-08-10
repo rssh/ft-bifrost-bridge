@@ -178,10 +178,11 @@ leader reward are all GONE.
 > then forbade removing anything. One nested record can be replaced wholesale by
 > governance without renumbering its neighbours.
 
-*Implementation status* (2026-08-07). The seven-field table and [CFG-1] are
-implemented in `onchain/lib/bifrost/types/config.ak`. Every reader is migrated:
-`config.ak`, `bridged-token.ak`, `completed-peg-ins-merkle-tree.ak`, `peg-in.ak`
-and `peg-out.ak`.
+*Implementation status* (2026-08-10). The eight-field table, [CFG-1] and
+[CFG-2] are implemented in `onchain/lib/bifrost/types/config.ak`. Every reader
+is migrated: `config.ak`, `bridged-token.ak`, `completed-peg-ins-merkle-tree.ak`,
+`peg-in.ak` and `peg-out.ak`. Per [CFG-2] the `tm_script_hash` getter exists but
+no validator calls it.
 
 Decisions taken during implementation:
 
@@ -766,6 +767,11 @@ Decisions taken during implementation:
   evidence into the singleton instead of removing it.
 - Every other Update-Y rule is unchanged. The branch differs only in whose
   signature authorizes it.
+
+*Implementation status* (2026-08-10). [UY-5] and [PRE-1] are implemented in
+`onchain/validators/bitcoin/treasury.ak`. The `FederationReset` branch and its
+redeemer variant are removed. `TreasuryDatum` keeps `last_reset_tm_txid` as an
+inert field, so the datum shape and its off-chain readers are undisturbed.
 
 > **Why [UY-6] is not worth keeping.** It restricted the federation to setting
 > `y_federation` itself. That is trivially bypassed in two transactions: set

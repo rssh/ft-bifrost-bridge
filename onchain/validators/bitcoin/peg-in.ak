@@ -595,7 +595,7 @@ fn t_recipient() -> Address {
   }
 }
 
-//The rev-5.4 seven-field Config datum (spec §Config datum), raw on purpose:
+//The rev-5.4 eight-field Config datum (spec §Config datum), raw on purpose:
 //readers use positional getters, so the fixture mirrors the wire encoding.
 fn t_config_datum_data() -> Data {
   let update_auth_data: Data = Some(CardanoSignature { hash: #"aadd" })
@@ -616,6 +616,8 @@ fn t_config_datum_data() -> Data {
       builtin.b_data(t_bridged_token_policy),
       builtin.b_data(t_cpi_policy),
       builtin.b_data(t_bridge_state_policy),
+      //tm_script_hash, spec [CFG-2]: no on-chain reader
+      builtin.b_data(#"aa333333333333333333333333333333333333333333333333333333"),
       builtin.b_data(t_peg_in_script_hash),
       builtin.b_data(#"aa555555555555555555555555555555555555555555555555555555"),
       params_data,

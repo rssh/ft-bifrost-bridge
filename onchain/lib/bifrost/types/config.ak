@@ -8,7 +8,7 @@ pub type ConfigSpendRedeemer {
   Retire
 }
 
-//The rev-5.4 seven-field Config datum (spec §Config datum). update_auth comes
+//The rev-5.4 eight-field Config datum (spec §Config datum). update_auth comes
 //first, because it is the field that governs every other one.
 //
 //Removed from the rev-5.1 layout (spec §Config datum, "Rev 5.1's fields ...
@@ -33,6 +33,11 @@ pub type ConfigDatum {
   completed_peg_ins_policy: PolicyId,
   //Bridge state singleton NFT policy
   bridge_state_policy: PolicyId,
+  //spec [CFG-2]: the TM validator hash (= TM NFT policy id). NO on-chain
+  //reader; published so off-chain readers can locate the TM address without
+  //a build-time constant. Changing it alone does NOT swap the TM validator:
+  //the singleton is compile-parameterized by this hash.
+  tm_script_hash: ByteArray,
   peg_in_script_hash: ByteArray,
   peg_out_script_hash: ByteArray,
   //Operational parameters, one nested record so governance can replace it
@@ -111,18 +116,25 @@ pub fn get_bridge_state_policy(config_fields: List<Data>) -> PolicyId {
   builtin.un_b_data(safe_list_at(config_fields, 3))
 }
 
-pub fn get_peg_in_script_hash(config_fields: List<Data>) -> ByteArray {
+//spec [CFG-2]: NO on-chain reader. Off-chain/test use only; it exists so the
+//config_getters_match_datum_fields test pins index 4, and so an off-chain
+//Aiken consumer never hard-codes the index.
+pub fn get_tm_script_hash(config_fields: List<Data>) -> ByteArray {
   builtin.un_b_data(safe_list_at(config_fields, 4))
 }
 
-pub fn get_peg_out_script_hash(config_fields: List<Data>) -> ByteArray {
+pub fn get_peg_in_script_hash(config_fields: List<Data>) -> ByteArray {
   builtin.un_b_data(safe_list_at(config_fields, 5))
 }
 
-//The nested params record (ConfigDatum field 6) as its raw fields list.
+pub fn get_peg_out_script_hash(config_fields: List<Data>) -> ByteArray {
+  builtin.un_b_data(safe_list_at(config_fields, 6))
+}
+
+//The nested params record (ConfigDatum field 7) as its raw fields list.
 //Indexes inside it live only in the getters below.
 fn get_params_fields(config_fields: List<Data>) -> List<Data> {
-  builtin.unconstr_fields(safe_list_at(config_fields, 6))
+  builtin.unconstr_fields(safe_list_at(config_fields, 7))
 }
 
 pub fn get_fee_rate_sat_per_vb(config_fields: List<Data>) -> Int {
@@ -180,8 +192,9 @@ test config_getters_match_datum_fields() {
       bridged_token_policy: #"aa01",
       completed_peg_ins_policy: #"aa02",
       bridge_state_policy: #"aa03",
-      peg_in_script_hash: #"aa04",
-      peg_out_script_hash: #"aa05",
+      tm_script_hash: #"aa04",
+      peg_in_script_hash: #"aa05",
+      peg_out_script_hash: #"aa06",
       params,
     }
   let datum_data: Data = datum
@@ -195,11 +208,13 @@ test config_getters_match_datum_fields() {
     get_completed_peg_ins_policy(fields) == datum.completed_peg_ins_policy,
     //index 3
     get_bridge_state_policy(fields) == datum.bridge_state_policy,
-    //index 4
-    get_peg_in_script_hash(fields) == datum.peg_in_script_hash,
+    //index 4, spec [CFG-2]
+    get_tm_script_hash(fields) == datum.tm_script_hash,
     //index 5
+    get_peg_in_script_hash(fields) == datum.peg_in_script_hash,
+    //index 6
     get_peg_out_script_hash(fields) == datum.peg_out_script_hash,
-    //index 6, nested params record
+    //index 7, nested params record
     get_fee_rate_sat_per_vb(fields) == params.fee_rate_sat_per_vb,
     get_per_pegout_fee(fields) == params.per_pegout_fee,
     get_min_peg_out_fbtc(fields) == params.min_peg_out_fbtc,

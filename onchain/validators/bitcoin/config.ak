@@ -155,10 +155,11 @@ const t_own_ref: OutputReference =
     output_index: 0,
   }
 
-//The rev-5.4 seven-field Config datum (spec §Config datum), built as raw
+//The rev-5.4 eight-field Config datum (spec §Config datum), built as raw
 //Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
-//3 bridge_state_policy, 4 peg_in_script_hash, 5 peg_out_script_hash,
-//6 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
+//3 bridge_state_policy, 4 tm_script_hash [CFG-2], 5 peg_in_script_hash,
+//6 peg_out_script_hash,
+//7 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
 //Raw on purpose: the spend handler itself takes the datum raw, so the
 //fixture mirrors the wire encoding, and it stays valid across a future datum
 //shape evolution.
@@ -194,6 +195,8 @@ fn t_datum_data(update_auth: Option<AuthorizationMethod>) -> Data {
       builtin.b_data(#"aa111111111111111111111111111111111111111111111111111111"),
       builtin.b_data(#"aa444444444444444444444444444444444444444444444444444444"),
       builtin.b_data(#"aa555555555555555555555555555555555555555555555555555555"),
+      //tm_script_hash, spec [CFG-2]: no on-chain reader
+      builtin.b_data(#"aa888888888888888888888888888888888888888888888888888888"),
       builtin.b_data(#"aa666666666666666666666666666666666666666666666666666666"),
       builtin.b_data(#"aa777777777777777777777777777777777777777777777777777777"),
       params_data,
@@ -219,14 +222,14 @@ fn t_set_field(datum_data: Data, index: Int, value: Data) -> Data {
 }
 
 //The generic "some field changed" edit the Update tests apply: rewrite
-//field 4 (peg_in_script_hash) to a value the old datum did not carry. Which
+//field 5 (peg_in_script_hash) to a value the old datum did not carry. Which
 //field changes is irrelevant to these tests - the Update handler accepts any
 //datum content and they exercise the address, value and authorization rules.
 const t_edited_peg_in_hash: ByteArray =
   #"bb666666666666666666666666666666666666666666666666666666"
 
 fn t_edited_datum(datum_data: Data) -> Data {
-  t_set_field(datum_data, 4, builtin.b_data(t_edited_peg_in_hash))
+  t_set_field(datum_data, 5, builtin.b_data(t_edited_peg_in_hash))
 }
 
 fn t_config_output(datum_data: Data) -> Output {
@@ -381,7 +384,7 @@ test update_allows_changing_bridged_token_identity() {
   t_spend(old_datum, Update, tx)
 }
 
-//Shape evolution: appending an 8th field to the datum is a legal update
+//Shape evolution: appending a 9th field to the datum is a legal update
 test update_allows_appending_datum_fields() {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
   let extended_datum =

@@ -81,10 +81,11 @@ const t_peg_in_hash: ByteArray =
 const t_peg_out_hash: ByteArray =
   #"aa777777777777777777777777777777777777777777777777777777"
 
-//The rev-5.4 seven-field Config datum (spec §Config datum), built as raw
+//The rev-5.4 eight-field Config datum (spec §Config datum), built as raw
 //Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
-//3 bridge_state_policy, 4 peg_in_script_hash, 5 peg_out_script_hash,
-//6 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
+//3 bridge_state_policy, 4 tm_script_hash [CFG-2], 5 peg_in_script_hash,
+//6 peg_out_script_hash,
+//7 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
 //No asset name field: spec [CFG-1] makes it the constant "fSAT". Raw on
 //purpose: readers use positional getters and never cast to ConfigDatum, so
 //the fixture mirrors the wire encoding a deployed reader sees, and it stays
@@ -121,6 +122,8 @@ fn t_config_datum_data() -> Data {
       builtin.b_data(t_own_policy),
       builtin.b_data(#"aa222222222222222222222222222222222222222222222222222222"),
       builtin.b_data(#"aa333333333333333333333333333333333333333333333333333333"),
+      //tm_script_hash, spec [CFG-2]: no on-chain reader
+      builtin.b_data(#"aa444444444444444444444444444444444444444444444444444444"),
       builtin.b_data(t_peg_in_hash),
       builtin.b_data(t_peg_out_hash),
       params_data,

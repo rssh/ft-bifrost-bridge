@@ -800,8 +800,9 @@ inert field, so the datum shape and its off-chain readers are undisturbed.
 - [SPI-4] REVISED. binocular MUST serve a swept peg-ins membership proof to any
   caller. heimdall MUST NOT be the proof server.
 - [SPI-6] binocular MUST derive the swept set by walking the Bitcoin treasury
-  chain, and MUST reconcile it against the singleton's confirm history before
-  serving a proof.
+  chain BACKWARD from the singleton's `treasury_utxo_id`, following input-0
+  ancestry, and MUST refuse to serve anything if the resulting root does not
+  equal the singleton's `spi_root`.
 - [SPI-5] PARKED with [CPI-11]. It would require heimdall to set every entry's
   `leader_credential` from the leader election, and a participant whose own
   election result disagrees to refuse to sign.
@@ -837,8 +838,12 @@ inert field, so the datum shape and its off-chain readers are undisturbed.
 > Bitcoin alone is not sufficient, though. It reports what was SWEPT, while
 > `spi_root` only advances at Confirm on Cardano. A Bitcoin-only view is therefore
 > a superset whose extra entries would produce proofs that fail until their TM
-> confirms. Reconciling against the singleton's history is bookkeeping, not a
-> second data source.
+> confirms.
+>
+> Walking BACKWARD from the head cuts that superset structurally rather than by
+> comparison. A TM mined but not yet confirmed SPENDS the head, so ancestry from
+> the head can never reach it. The root cross-check is then a integrity check on
+> the walk, not the boundary itself.
 >
 > No trust is involved either way. Every proof is verified on-chain against the
 > attested root, so a wrong one simply fails `mpf.has`. Rev 5.1 settled the same
@@ -1025,7 +1030,8 @@ instance.
 - [OB-12] binocular MUST serve a deposit-inclusion bundle for one Bitcoin
   outpoint: the 80-byte block header, the tx merkle proof with its index, the
   MPF membership proof of the block hash against the oracle's
-  `confirmed_blocks_root`, and the raw deposit transaction.
+  `confirmed_blocks_root`, the raw deposit transaction, and the vout, amount and
+  depositor key the `PegInDatum` also carries.
 - [OB-13] binocular MUST serve that bundle to any caller, on the same terms as
   [SPI-4].
 

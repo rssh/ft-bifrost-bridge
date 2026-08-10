@@ -1022,6 +1022,22 @@ instance.
 - [OB-6] The bootstrap command MUST write the singleton datum of §Deployment.
 - [OB-7] The bootstrap command MUST accept the treasury value as an operator
   input.
+- [OB-12] binocular MUST serve a deposit-inclusion bundle for one Bitcoin
+  outpoint: the 80-byte block header, the tx merkle proof with its index, the
+  MPF membership proof of the block hash against the oracle's
+  `confirmed_blocks_root`, and the raw deposit transaction.
+- [OB-13] binocular MUST serve that bundle to any caller, on the same terms as
+  [SPI-4].
+
+> **Why [OB-12] belongs to the watchtower.** Those four items are exactly the
+> `PegInRequest` mint redeemer. Assembling them needs a Bitcoin node for the
+> header and the merkle path, and the oracle's whole confirmed-blocks trie for
+> the membership proof. A browser has neither. Watchtowers have both already,
+> because deposit detection is their existing duty.
+>
+> The trust argument is [SPI-4]'s, unchanged: the mint handler verifies every
+> element on-chain against the oracle, so a wrong bundle fails at submission and
+> the server needs no trust.
 
 ## Off-chain: heimdall
 
@@ -1063,6 +1079,15 @@ earlier blast-radius analysis.
   pinned CIP-33 reference UTxO.
 - [OF-7] The Config parser MUST follow §Config datum. It parses rev 5.1's layout
   positionally.
+- [OF-8] `claim.ts` MUST build a `PegInRequest` from the [OB-12] bundle rather
+  than assembling the header, merkle path and oracle proof itself.
+
+> **Why [OF-8] is more than a simplification.** Today only a watchtower creates a
+> PegInRequest, so a depositor waits for one to notice the deposit. With the
+> bundle served, the frontend can mint the request itself, which removes that
+> liveness dependency from the depositor's path. Minting is already
+> permissionless and `deposit_binding_ok` binds the datum to the proven deposit,
+> so nothing about the security model changes.
 
 > **Implementation status.** One latent frontend bug is worth fixing in the same
 > pass: `claim.ts` reads the completed peg-ins root by taking the first 32-byte

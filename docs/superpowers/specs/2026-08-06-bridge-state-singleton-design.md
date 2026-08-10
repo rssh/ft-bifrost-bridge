@@ -803,6 +803,9 @@ inert field, so the datum shape and its off-chain readers are undisturbed.
   chain BACKWARD from the singleton's `treasury_utxo_id`, following input-0
   ancestry, and MUST refuse to serve anything if the resulting root does not
   equal the singleton's `spi_root`.
+- [SPI-7] binocular MAY take each TM's raw bytes from either the spent
+  `Unconfirmed` datums or a Bitcoin node, and MUST key them by the txid
+  RECOMPUTED from the bytes rather than by any self-declared field.
 - [SPI-5] PARKED with [CPI-11]. It would require heimdall to set every entry's
   `leader_credential` from the leader election, and a participant whose own
   election result disagrees to refuse to sign.
@@ -839,6 +842,12 @@ inert field, so the datum shape and its off-chain readers are undisturbed.
 > `spi_root` only advances at Confirm on Cardano. A Bitcoin-only view is therefore
 > a superset whose extra entries would produce proofs that fail until their TM
 > confirms.
+>
+> The chain is a chain of outpoints, not of bytes, so [SPI-7] lets the bytes come
+> from Cardano: §No Confirmed record already makes the spent `Unconfirmed` datums
+> the permanent history source, and [OB-9] sources the CPO side the same way.
+> Recomputing the txid from the bytes is what makes the source interchangeable, and
+> it means serving proofs needs no Bitcoin node.
 >
 > Walking BACKWARD from the head cuts that superset structurally rather than by
 > comparison. A TM mined but not yet confirmed SPENDS the head, so ancestry from

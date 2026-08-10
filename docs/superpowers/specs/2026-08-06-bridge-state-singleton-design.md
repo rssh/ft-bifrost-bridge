@@ -103,7 +103,7 @@ same rule, and none of them takes `tm_nft_policy_id`.
 
 ### Config datum
 
-Seven fields. `update_auth` comes first, because it is the field that governs
+Eight fields. `update_auth` comes first, because it is the field that governs
 every other one.
 
 | Index | Field | Notes |
@@ -112,9 +112,27 @@ every other one.
 | 1 | `bridged_token_policy` | fBTC policy id |
 | 2 | `completed_peg_ins_policy` | CPI trie NFT policy |
 | 3 | `bridge_state_policy` | singleton NFT policy |
-| 4 | `peg_in_script_hash` | |
-| 5 | `peg_out_script_hash` | |
-| 6 | `params` | nested record: fee rate, per-peg-out fee, minimum peg-out, schedule |
+| 4 | `tm_script_hash` | TM validator hash, which is also the TM NFT policy id |
+| 5 | `peg_in_script_hash` | |
+| 6 | `peg_out_script_hash` | |
+| 7 | `params` | nested record: fee rate, per-peg-out fee, minimum peg-out, schedule |
+
+- [CFG-2] `tm_script_hash` has NO on-chain reader. It is published so that
+  off-chain readers can locate the TM address without a hard-coded constant.
+
+> **Why publish a hash nothing on-chain reads.** Peg-out payout discovery has to
+> find `Unconfirmed` TM records, and reconstruction has to walk them, but no
+> Config field let a reader derive the TM address. Every off-chain consumer
+> therefore pinned it as a build-time constant, which is exactly the coupling
+> [PAR-1] removes elsewhere. The frontend is the case that made this visible: it
+> carried a hard-coded `TM_NFT_POLICY_ID`, and a redeployment silently invalidates
+> it.
+>
+> Publishing it does NOT make the TM validator swappable. The bridge state
+> singleton is compile-parameterized by the TM script hash, so changing field 4
+> alone would leave the singleton gated on the old validator. A TM change is a
+> redeployment of both, and [CFG-2] exists to spare readers a constant, not to
+> create a swap point.
 
 Rev 5.1's fields for the bridged-token asset name, the two `legit_TM`
 verifiers, the peg-in close verifier, the initial treasury outpoint and the
@@ -242,7 +260,7 @@ field order is consensus-visible. No validator uses them.
 > retires the `TmDatum` mirror and introduces this one. That is a fair trade, not
 > a wash. `TmDatum` had two variants, an arity that had grown twice, and a
 > boolean pinned at Constr index 3 so that an Aiken prefix read would land on it.
-> `BridgeState` is five flat primitives, one constructor, and append-only by
+> `BridgeState` is four flat primitives, one constructor, and append-only by
 > [LIB-3].
 > The two definitions still MUST move in lockstep.
 
@@ -588,11 +606,11 @@ is gone from `constants.ak` too, now that [CPO-13] removed its last reader.
 
 Decisions taken during implementation:
 
-- **Four datum fields, not five.** The prose above says "five flat primitives"
-  once and names a federation sweep txid once. The normative Aiken block and the
-  field table both list four. The implementation follows the normative block. The
-  rejected alternative was a fifth `federation_sweep_txid` field, which no check
-  in this document reads.
+- **Four datum fields, not five.** The implementation followed the normative
+  Aiken block and field table over a stale prose line that said "five flat
+  primitives", left over from removing `FederationReset`. The prose is now
+  corrected. The rejected alternative was a fifth `federation_sweep_txid` field,
+  which no check in this document reads.
 - **[BSS-2] reads the redeemer tag, not a decoded type.** The validator calls
   `builtin.un_constr_data` and compares the tag against a named constant. The
   rejected alternative was to import the Scalus `TmSpendRedeemer` shape as an

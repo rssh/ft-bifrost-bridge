@@ -2,6 +2,7 @@ use aiken/collection/dict
 use aiken/collection/list
 use aiken/option
 use bifrost/constants
+use bifrost/types/completed_peg_ins.{CompletedPegInsTrieDatum}
 use bifrost/types/config
 use bifrost/types/peg_in.{CompletePegIn, PegInWithdrawRedeemer}
 use bifrost/utils
@@ -10,10 +11,6 @@ use cardano/assets.{PolicyId, tokens}
 use cardano/script_context.{ScriptContext}
 use cardano/transaction.{
   InlineDatum, OutputReference, Transaction, Withdraw, find_input,
-}
-
-pub type CompletedPegInsMerkleTreeDatum {
-  root: ByteArray,
 }
 
 pub type SpendRedeemer {
@@ -44,7 +41,7 @@ validator completed_peg_ins_merkle_tree_validator(
 
     let output_has_correct_datum =
       completed_peg_ins_merkle_tree_output.datum == InlineDatum(
-        CompletedPegInsMerkleTreeDatum {
+        CompletedPegInsTrieDatum {
           root: #"0000000000000000000000000000000000000000000000000000000000000000",
         },
       )

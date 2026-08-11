@@ -81,15 +81,18 @@ const t_peg_in_hash: ByteArray =
 const t_peg_out_hash: ByteArray =
   #"aa777777777777777777777777777777777777777777777777777777"
 
-//The rev-5.4 eight-field Config datum (spec §Config datum), built as raw
+//The rev-5.4 fifteen-field Config datum (spec §Config datum), built as raw
 //Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
 //3 bridge_state_policy, 4 tm_script_hash [CFG-2], 5 peg_in_script_hash,
-//6 peg_out_script_hash,
-//7 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
-//No asset name field: spec [CFG-1] makes it the constant "fSAT". Raw on
-//purpose: readers use positional getters and never cast to ConfigDatum, so
-//the fixture mirrors the wire encoding a deployed reader sees, and it stays
-//valid across a future datum shape evolution.
+//6 peg_out_script_hash, 7 spo_bans_policy_id, 8 base_ban_duration_ms,
+//9 max_faults_before_permanent, 10 max_validity_window_ms,
+//11 spos_registry_policy_id, 12 treasury_info_policy_id,
+//13 treasury_info_asset_name,
+//14 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
+//No bridged-token asset name field: spec [CFG-1] makes it the constant
+//"fSAT". Raw on purpose: readers use positional getters and never cast to
+//ConfigDatum, so the fixture mirrors the wire encoding a deployed reader
+//sees, and it stays valid across a future datum shape evolution.
 fn t_config_datum_data() -> Data {
   let update_auth_data: Data = Some(CardanoSignature { hash: #"aadd" })
   let schedule_data: Data =
@@ -126,6 +129,15 @@ fn t_config_datum_data() -> Data {
       builtin.b_data(#"aa444444444444444444444444444444444444444444444444444444"),
       builtin.b_data(t_peg_in_hash),
       builtin.b_data(t_peg_out_hash),
+      //Federation identity, indexes 7-13 (spec §Config datum). Off-chain
+      //readers only; no validator in this tree reads a current value.
+      builtin.b_data(#"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+      builtin.i_data(600_000),
+      builtin.i_data(3),
+      builtin.i_data(3_600_000),
+      builtin.b_data(#"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+      builtin.b_data(#"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+      builtin.b_data("TMTx"),
       params_data,
     ],
   )

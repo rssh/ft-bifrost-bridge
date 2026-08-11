@@ -1,15 +1,21 @@
 use aiken/builtin
 use bifrost/types/general.{AuthorizationMethod, CardanoSignature}
 use bifrost/utils.{safe_list_at}
-use cardano/assets.{PolicyId}
+use cardano/assets.{AssetName, PolicyId}
 
 pub type ConfigSpendRedeemer {
   Update
   Retire
 }
 
-//The rev-5.4 eight-field Config datum (spec §Config datum). update_auth comes
-//first, because it is the field that governs every other one.
+//The rev-5.4 fifteen-field Config datum (spec §Config datum). update_auth
+//comes first, because it is the field that governs every other one.
+//
+//`params` comes LAST, and deliberately. Every field before it is a scalar at a
+//frozen index; a nested record in the middle would have to be renumbered past
+//each time the datum grows. Appending after `params` instead of before it also
+//keeps the [LIB-3] append rule honest — the record never moves, so no reader
+//that already found it has to be rebuilt.
 //
 //Removed from the rev-5.1 layout (spec §Config datum, "Rev 5.1's fields ...
 //are all GONE"):
@@ -40,8 +46,41 @@ pub type ConfigDatum {
   tm_script_hash: ByteArray,
   peg_in_script_hash: ByteArray,
   peg_out_script_hash: ByteArray,
+  //-- Federation identity (ban policy + SPO registry). Off-chain readers only,
+  //-- like the params below; no Aiken validator reads a current value here.
+  //--
+  //-- Published rather than derived, and that is the whole point. Every value
+  //-- an SPO would otherwise hand-copy to locate these is an INPUT to the
+  //-- policy id it identifies, so no node can derive the address it would read
+  //-- them from — and one wrong input yields a well-formed address holding
+  //-- NOTHING rather than an error. Since the eligible DKG roster is the
+  //-- registry MINUS active bans, either half of that silently splits the
+  //-- roster with nothing in any node's log.
+  //The DEPLOYED spo_bans policy id; the ban script address follows from it.
+  spo_bans_policy_id: PolicyId,
+  //Ban schedule, mirroring what spo_bans was parameterized with. Read by the
+  //ApplyBan builder, which computes a ban's end time from the first two and
+  //bounds its validity interval by the third. Already baked into the id above;
+  //publishing them means they are read rather than typed.
+  base_ban_duration_ms: Int,
+  max_faults_before_permanent: Int,
+  max_validity_window_ms: Int,
+  //The DEPLOYED spos_registry policy id; the registry address follows from it.
+  spos_registry_policy_id: PolicyId,
+  //The DEPLOYED treasury_info policy id. Worth publishing even though it is a
+  //pure function of the spos_registry policy alone (rev 5.4 dropped
+  //treasury_info's TM-NFT-policy parameter with the FederationReset branch
+  //that was its only reader): a reader must still apply that parameter to the
+  //same blueprint, and drift yields a different hash, a different address and
+  //an unfindable state UTxO rather than an error.
+  treasury_info_policy_id: PolicyId,
+  //Asset name of the treasury_info state NFT. Unlike every other field here it
+  //is derivable from nothing at all — a name chosen at bootstrap — so
+  //publishing it is the only way an SPO can avoid typing it.
+  treasury_info_asset_name: AssetName,
   //Operational parameters, one nested record so governance can replace it
-  //wholesale without renumbering its neighbours.
+  //wholesale without renumbering its neighbours. Last field; see the note
+  //above the record.
   params: ConfigParams,
 }
 
@@ -131,10 +170,38 @@ pub fn get_peg_out_script_hash(config_fields: List<Data>) -> ByteArray {
   builtin.un_b_data(safe_list_at(config_fields, 6))
 }
 
-//The nested params record (ConfigDatum field 7) as its raw fields list.
-//Indexes inside it live only in the getters below.
+pub fn get_spo_bans_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 7))
+}
+
+pub fn get_base_ban_duration_ms(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 8))
+}
+
+pub fn get_max_faults_before_permanent(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 9))
+}
+
+pub fn get_max_validity_window_ms(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 10))
+}
+
+pub fn get_spos_registry_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 11))
+}
+
+pub fn get_treasury_info_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 12))
+}
+
+pub fn get_treasury_info_asset_name(config_fields: List<Data>) -> AssetName {
+  builtin.un_b_data(safe_list_at(config_fields, 13))
+}
+
+//The nested params record (ConfigDatum field 14, the last one) as its raw
+//fields list. Indexes inside it live only in the getters below.
 fn get_params_fields(config_fields: List<Data>) -> List<Data> {
-  builtin.unconstr_fields(safe_list_at(config_fields, 7))
+  builtin.unconstr_fields(safe_list_at(config_fields, 14))
 }
 
 pub fn get_fee_rate_sat_per_vb(config_fields: List<Data>) -> Int {
@@ -195,6 +262,13 @@ test config_getters_match_datum_fields() {
       tm_script_hash: #"aa04",
       peg_in_script_hash: #"aa05",
       peg_out_script_hash: #"aa06",
+      spo_bans_policy_id: #"aa07",
+      base_ban_duration_ms: 8,
+      max_faults_before_permanent: 9,
+      max_validity_window_ms: 10,
+      spos_registry_policy_id: #"aa11",
+      treasury_info_policy_id: #"aa12",
+      treasury_info_asset_name: "aa13",
       params,
     }
   let datum_data: Data = datum
@@ -214,7 +288,21 @@ test config_getters_match_datum_fields() {
     get_peg_in_script_hash(fields) == datum.peg_in_script_hash,
     //index 6
     get_peg_out_script_hash(fields) == datum.peg_out_script_hash,
-    //index 7, nested params record
+    //index 7
+    get_spo_bans_policy_id(fields) == datum.spo_bans_policy_id,
+    //index 8
+    get_base_ban_duration_ms(fields) == datum.base_ban_duration_ms,
+    //index 9
+    get_max_faults_before_permanent(fields) == datum.max_faults_before_permanent,
+    //index 10
+    get_max_validity_window_ms(fields) == datum.max_validity_window_ms,
+    //index 11
+    get_spos_registry_policy_id(fields) == datum.spos_registry_policy_id,
+    //index 12
+    get_treasury_info_policy_id(fields) == datum.treasury_info_policy_id,
+    //index 13
+    get_treasury_info_asset_name(fields) == datum.treasury_info_asset_name,
+    //index 14, nested params record
     get_fee_rate_sat_per_vb(fields) == params.fee_rate_sat_per_vb,
     get_per_pegout_fee(fields) == params.per_pegout_fee,
     get_min_peg_out_fbtc(fields) == params.min_peg_out_fbtc,

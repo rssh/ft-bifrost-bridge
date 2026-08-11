@@ -607,7 +607,8 @@ fn t_recipient() -> Address {
   }
 }
 
-//The rev-5.4 eight-field Config datum (spec §Config datum), raw on purpose:
+//The rev-5.4 fifteen-field Config datum (spec §Config datum), raw on
+//purpose:
 //readers use positional getters, so the fixture mirrors the wire encoding.
 fn t_config_datum_data() -> Data {
   let update_auth_data: Data = Some(CardanoSignature { hash: #"aadd" })
@@ -632,6 +633,15 @@ fn t_config_datum_data() -> Data {
       builtin.b_data(#"aa333333333333333333333333333333333333333333333333333333"),
       builtin.b_data(t_peg_in_script_hash),
       builtin.b_data(#"aa555555555555555555555555555555555555555555555555555555"),
+      //Federation identity, indexes 7-13 (spec §Config datum). Off-chain
+      //readers only; no validator in this tree reads a current value.
+      builtin.b_data(#"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+      builtin.i_data(600_000),
+      builtin.i_data(3),
+      builtin.i_data(3_600_000),
+      builtin.b_data(#"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+      builtin.b_data(#"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+      builtin.b_data("TMTx"),
       params_data,
     ],
   )

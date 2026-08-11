@@ -155,11 +155,14 @@ const t_own_ref: OutputReference =
     output_index: 0,
   }
 
-//The rev-5.4 eight-field Config datum (spec §Config datum), built as raw
+//The rev-5.4 fifteen-field Config datum (spec §Config datum), built as raw
 //Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
 //3 bridge_state_policy, 4 tm_script_hash [CFG-2], 5 peg_in_script_hash,
-//6 peg_out_script_hash,
-//7 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
+//6 peg_out_script_hash, 7 spo_bans_policy_id, 8 base_ban_duration_ms,
+//9 max_faults_before_permanent, 10 max_validity_window_ms,
+//11 spos_registry_policy_id, 12 treasury_info_policy_id,
+//13 treasury_info_asset_name,
+//14 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
 //Raw on purpose: the spend handler itself takes the datum raw, so the
 //fixture mirrors the wire encoding, and it stays valid across a future datum
 //shape evolution.
@@ -199,6 +202,15 @@ fn t_datum_data(update_auth: Option<AuthorizationMethod>) -> Data {
       builtin.b_data(#"aa888888888888888888888888888888888888888888888888888888"),
       builtin.b_data(#"aa666666666666666666666666666666666666666666666666666666"),
       builtin.b_data(#"aa777777777777777777777777777777777777777777777777777777"),
+      //Federation identity, indexes 7-13 (spec §Config datum). Off-chain
+      //readers only; no validator in this tree reads a current value.
+      builtin.b_data(#"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+      builtin.i_data(600_000),
+      builtin.i_data(3),
+      builtin.i_data(3_600_000),
+      builtin.b_data(#"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+      builtin.b_data(#"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+      builtin.b_data("TMTx"),
       params_data,
     ],
   )

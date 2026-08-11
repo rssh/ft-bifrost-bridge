@@ -821,10 +821,16 @@ instance.
 
 **ConfigDatum (rev 5.4).** This table tracks the implemented `lib/bifrost/types/config.ak`
 field-for-field; the constructor order is normative, because readers index it positionally.
-Eight fields. `update_auth` comes first, because it is the field that governs every other one.
-Fields #1–6 are instance *wiring* — token identities and script hashes. Field #7 nests the
+Fifteen fields. `update_auth` comes first, because it is the field that governs every other one.
+Fields #1–6 are instance *wiring* — token identities and script hashes. Fields #7–13 are
+**federation identity**: the ban policy, its schedule, the SPO registry, and the Treasury state
+NFT — discovery fields in the sense of *The Config as the discovery root*. Field #14 nests the
 operational tunables: unlike the wiring they are expected to change, and **no Aiken validator
 reads a current value from them**.
+
+`params` is LAST, and that is normative. Every field before it is a scalar at a frozen index, so
+the datum grows by appending after the nested record, never by pushing it along. A reader that
+has located `params` never has to be rebuilt when the datum grows.
 
 | # | Field | Type | Description |
 |---|-------|------|-------------|
@@ -835,12 +841,35 @@ reads a current value from them**.
 | 4 | `tm_script_hash` | ByteArray (script hash) | the TM validator hash, which is also the TM NFT policy id — see [CFG-2] |
 | 5 | `peg_in_script_hash` | ByteArray (script hash) | peg-in spend logic (withdraw-script pattern) |
 | 6 | `peg_out_script_hash` | ByteArray (script hash) | peg-out spend logic (withdraw-script pattern) |
-| 7 | `params` | Params (nested record) | the operational tunables: `fee_rate_sat_per_vb`, `per_pegout_fee`, `min_peg_out_fbtc`, `schedule` — see §Operational parameters |
+| 7 | `spo_bans_policy_id` | PolicyId | the DEPLOYED `spo-bans.ak` policy id; the ban script address follows from it |
+| 8 | `base_ban_duration_ms` | Int | ban schedule — the base duration the ApplyBan builder computes a ban's end time from |
+| 9 | `max_faults_before_permanent` | Int | ban schedule — fault count past which a ban stops expiring |
+| 10 | `max_validity_window_ms` | Int | ban schedule — the bound on an ApplyBan transaction's validity interval |
+| 11 | `spos_registry_policy_id` | PolicyId | the DEPLOYED `spos-registry.ak` policy id; the registry address follows from it |
+| 12 | `treasury_info_policy_id` | PolicyId | the DEPLOYED Treasury state NFT policy id — see [CFG-3] |
+| 13 | `treasury_info_asset_name` | AssetName | asset name of the Treasury state NFT, chosen at bootstrap and derivable from nothing |
+| 14 | `params` | Params (nested record) | the operational tunables: `fee_rate_sat_per_vb`, `per_pegout_fee`, `min_peg_out_fbtc`, `schedule` — see §Operational parameters |
 
 - [CFG-1] The bridged-token asset name MUST be the constant `"fSAT"`, declared in
   `lib/bifrost/constants.ak`.
 - [CFG-2] `tm_script_hash` has NO on-chain reader. It is published so that off-chain readers can
   locate the TM address without a hard-coded constant.
+- [CFG-3] Fields #7–13 have NO on-chain reader. They are published so that an SPO configures none
+  of them by hand.
+
+> **Why the federation identities are published and not derived ([CFG-3]).** Every value that
+> locates a bridge's ban list or its SPO registry is an *input* to the policy id it identifies,
+> not an output of it. No node can derive the address it would read them from. Worse, one wrong
+> input yields a well-formed address holding nothing rather than an error. The eligible DKG
+> roster is the registry minus active bans, so either half being wrong silently splits the roster
+> with nothing in any node's log. Carrying the finished ids in the datum every reader already
+> authenticates removes that class of misconfiguration.
+>
+> `treasury_info_policy_id` is published even though it is a pure function of the registry policy
+> alone — rev 5.4 dropped `treasury_info`'s second parameter, the TM NFT policy, along with the
+> FederationReset branch that was its only reader. A reader still has to apply that one parameter
+> to the same blueprint to arrive at the same hash, and any drift yields a different address and
+> an unfindable state UTxO rather than an error, so publishing it stays worthwhile.
 
 > **Why the asset name is a constant and not a field ([CFG-1]).** It never varies within an
 > instance, and it never varies between instances either: one token is one satoshi, so the name
@@ -901,14 +930,14 @@ reader trusts a datum only if the UTxO's value contains the NFT.
   config_nft_asset_name)` (any chain indexer resolves an NFT to its UTxO), read its inline datum,
   decode `ConfigDatum`. Since the Config is never spent, the read is stable forever.
 
-> **Implementation status** (2026-08-10). The eight-field table, [CFG-1] and [CFG-2] are
-> implemented in `onchain/lib/bifrost/types/config.ak`, with every reader migrated (`config.ak`,
-> `bridged-token.ak`, `completed-peg-ins-merkle-tree.ak`, `peg-in.ak`, `peg-out.ak`); per [CFG-2]
-> the `tm_script_hash` getter exists but no validator calls it. binocular's Scalus `ConfigDatum`
-> and heimdall's `config_params.rs` decode the same eight fields by name. The datum is not
-> closed: the discovery fields required by *The Config as the discovery root* would append after
-> #7. `config.ak` carries a real `spend` handler: the Config is not immutable, it is governed —
-> see *Config UTxO governance*.
+> **Implementation status** (2026-08-11). The fifteen-field table, [CFG-1], [CFG-2] and [CFG-3]
+> are implemented in `onchain/lib/bifrost/types/config.ak`, with every reader migrated
+> (`config.ak`, `bridged-token.ak`, `completed-peg-ins-merkle-tree.ak`, `peg-in.ak`,
+> `peg-out.ak`); per [CFG-2] and [CFG-3] the getters for fields 4 and 7–13 exist but no validator
+> calls them. binocular's Scalus `ConfigDatum` and heimdall's `config_params.rs` decode the same
+> fifteen fields by name. The datum is not closed: the discovery fields still missing per *The
+> Config as the discovery root* would append after #14. `config.ak` carries a real `spend`
+> handler: the Config is not immutable, it is governed — see *Config UTxO governance*.
 
 <!-- G2 (revised 2026-07-15): the updatable values moved out of the Config into their own
      singleton after the interleaving analysis — (i) spending a referenced UTxO invalidates every
@@ -926,7 +955,7 @@ anchor, a pinned-copy source, or a floor enforced by the deterministic skip rule
 NFT-authenticated UTxO: with `update_auth` governance in place, a params singleton's update policy
 coincided with the Config's, buying complexity without benefit. There is no params NFT and no
 params wiring identity; an *Update operational parameters* is an authorized **Config Update** (see
-the Transaction catalog). Since rev 5.4 the tunables are one **nested record**, Config field #7
+the Transaction catalog). Since rev 5.4 the tunables are one **nested record**, Config field #14
 `params`, so governance replaces them wholesale without renumbering their neighbours.
 
 Two costs are accepted rather than hidden: parameter updates now **do** invalidate in-flight
@@ -1537,16 +1566,19 @@ it, and any transaction may instead embed the script and pay the size. Whether r
 should become instance-level, which would change that answer, is owned by *Final optimizations*
 [final-optimizations.md](final-optimizations.md).
 
-<!-- contract-CR: the discovery fields below are specified but not yet in config.ak. -->
-**Not yet reachable (contract-CR).** Seven identities an SPO program needs are absent from the
-datum today and are still handed to operators out of band: the oracle policy id, the TM NFT policy,
-the registry policy and its bootstrap outpoint, the ban-list identity, the authorized
-fault-verifier policies, and the Treasury state NFT identity. Each MUST become a Config-resident
-discovery field.
+<!-- contract-CR: the three discovery fields below are specified but not yet in config.ak. -->
+**Not yet reachable (contract-CR).** Three identities an SPO program needs are absent from the
+datum today and are still handed to operators out of band: the oracle policy id, the registry's
+bootstrap outpoint, and the authorized fault-verifier policies. Each MUST become a
+Config-resident discovery field.
 
-For the two that are trust anchors — the oracle policy and the TM NFT policy — the Config field is
-a **copy for discovery only**. Enforcement stays on the validator parameter, per *Where each
-identity is fixed* in the creation flow, so the copy adds no governance power over fund safety. It
+Four of the original seven are now resident: the TM NFT policy is field 4 ([CFG-2]), and the ban
+list, the SPO registry and the Treasury state NFT are fields 7, 11 and 12–13 ([CFG-3]).
+
+For a trust anchor — the oracle policy, and the TM NFT policy already resident as field 4 — the
+Config field is a **copy for discovery only**. Enforcement stays on the validator parameter, per
+*Where each identity is fixed* in the creation flow, so the copy adds no governance power over
+fund safety. It
 is self-verifying rather than trusted: a client derives the reading validator's address from the
 copied value plus the blueprint, then checks that the instance's UTxOs are actually at that
 address. A copy that disagrees with the deployed instance is detected on first use.
@@ -1611,10 +1643,10 @@ operator performs:
    policy, `peg-in` / `peg-out` (+ their withdraw scripts), the completed-peg-ins trie policy,
    the bridge state policy, and the TM policy with its mint gate.
 4. **Mint the Config NFT** (`config.ak`), creating the Config UTxO whose datum is the spine of the
-   instance: it records every cross-referenced script hash and token identity per the eight-field
+   instance: it records every cross-referenced script hash and token identity per the fifteen-field
    table of §Config UTxO (`update_auth`, the fBTC policy, the completed-peg-ins trie policy, the
    bridge state policy, the TM script hash, and the peg-in/peg-out withdraw scripts). The same
-   datum carries the initial **operational parameters** nested as field #7 `params` (fee rate,
+   datum carries the initial **operational parameters** nested as field #14 `params` (fee rate,
    per-peg-out fee floor, minimum peg-out, schedule); see §Operational parameters.
    The wiring section must be final at mint time — **the Config NFT is the identity of the
    instance**: a different Config UTxO implies a different fBTC policy, i.e. a *new*,
@@ -2809,7 +2841,7 @@ Branch (a), never swept, needs [CLR-5] **and** [CLR-6]. Branch (b), duplicate, n
 ### Update operational parameters (Cardano)
 
 **Purpose**: change the tunable protocol values (fee rate, per-peg-out fee floor, minimum
-peg-out, schedule). Since the 2026-07-17 merge these are Config data — nested as field #7
+peg-out, schedule). Since the 2026-07-17 merge these are Config data — nested as field #14
 `params` since rev 5.4 — so this is an authorized **Config Update** — the same transaction that
 rewires the instance — not a separate contract.
 

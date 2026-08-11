@@ -107,6 +107,13 @@ fn t_config_datum() -> ConfigDatum {
       final_tm_cutoff: 345600,
       stability_window: 129600,
     },
+    spo_bans_policy_id: #"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    base_ban_duration_ms: 600_000,
+    max_faults_before_permanent: 3,
+    max_validity_window_ms: 3_600_000,
+    spos_registry_policy_id: #"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    treasury_info_policy_id: #"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    treasury_info_asset_name: "TMTx",
   }
 }
 

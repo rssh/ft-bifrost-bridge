@@ -49,6 +49,36 @@ pub type ConfigDatum {
   //than ten top-level slots; governance updates replace it wholesale,
   //effective from the next epoch boundary.
   schedule: ScheduleParams,
+  //-- Federation identity (ban policy + SPO registry). Off-chain readers only,
+  //-- like the tunables above; no Aiken validator reads a current value here.
+  //--
+  //-- Published rather than derived, and that is the whole point. Every value
+  //-- an SPO would otherwise hand-copy to locate these is an INPUT to the
+  //-- policy id it identifies, so no node can derive the address it would read
+  //-- them from — and one wrong input yields a well-formed address holding
+  //-- NOTHING rather than an error. Since the eligible DKG roster is the
+  //-- registry MINUS active bans, either half of that silently splits the
+  //-- roster with nothing in any node's log.
+  //The DEPLOYED spo_bans policy id; the ban script address follows from it.
+  spo_bans_policy_id: PolicyId,
+  //Ban schedule, mirroring what spo_bans was parameterized with. Read by the
+  //ApplyBan builder, which computes a ban's end time from the first two and
+  //bounds its validity interval by the third. Already baked into the id above;
+  //publishing them means they are read rather than typed.
+  base_ban_duration_ms: Int,
+  max_faults_before_permanent: Int,
+  max_validity_window_ms: Int,
+  //The DEPLOYED spos_registry policy id; the registry address follows from it.
+  spos_registry_policy_id: PolicyId,
+  //The DEPLOYED treasury_info policy id. Worth publishing even though it is a
+  //pure function of (spos_registry policy, TM-NFT policy): every reader must
+  //apply BOTH parameters identically or it computes a different hash, a
+  //different address, and an unfindable state UTxO.
+  treasury_info_policy_id: PolicyId,
+  //Asset name of the treasury_info state NFT. Unlike every other field here it
+  //is derivable from nothing at all — a name chosen at bootstrap — so
+  //publishing it is the only way an SPO can avoid typing it.
+  treasury_info_asset_name: AssetName,
 }
 
 //The tunable protocol schedule, E-relative slot values (spec §TM batches and
@@ -179,6 +209,34 @@ pub fn get_schedule(config_fields: List<Data>) -> ScheduleParams {
   schedule
 }
 
+pub fn get_spo_bans_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 17))
+}
+
+pub fn get_base_ban_duration_ms(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 18))
+}
+
+pub fn get_max_faults_before_permanent(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 19))
+}
+
+pub fn get_max_validity_window_ms(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 20))
+}
+
+pub fn get_spos_registry_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 21))
+}
+
+pub fn get_treasury_info_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 22))
+}
+
+pub fn get_treasury_info_asset_name(config_fields: List<Data>) -> AssetName {
+  builtin.un_b_data(safe_list_at(config_fields, 23))
+}
+
 //Pins every getter index to its ConfigDatum record field: reordering record
 //fields or getter indexes independently makes this fail.
 test config_getters_match_datum_fields() {
@@ -214,6 +272,13 @@ test config_getters_match_datum_fields() {
       min_peg_out_fbtc: 14,
       leader_reward: 15,
       schedule,
+      spo_bans_policy_id: #"aa17",
+      base_ban_duration_ms: 18,
+      max_faults_before_permanent: 19,
+      max_validity_window_ms: 20,
+      spos_registry_policy_id: #"aa21",
+      treasury_info_policy_id: #"aa22",
+      treasury_info_asset_name: #"aa23",
     }
   let datum_data: Data = datum
   let fields = builtin.unconstr_fields(datum_data)
@@ -235,5 +300,12 @@ test config_getters_match_datum_fields() {
     get_min_peg_out_fbtc(fields) == datum.min_peg_out_fbtc,
     get_leader_reward(fields) == datum.leader_reward,
     get_schedule(fields) == datum.schedule,
+    get_spo_bans_policy_id(fields) == datum.spo_bans_policy_id,
+    get_base_ban_duration_ms(fields) == datum.base_ban_duration_ms,
+    get_max_faults_before_permanent(fields) == datum.max_faults_before_permanent,
+    get_max_validity_window_ms(fields) == datum.max_validity_window_ms,
+    get_spos_registry_policy_id(fields) == datum.spos_registry_policy_id,
+    get_treasury_info_policy_id(fields) == datum.treasury_info_policy_id,
+    get_treasury_info_asset_name(fields) == datum.treasury_info_asset_name,
   }
 }

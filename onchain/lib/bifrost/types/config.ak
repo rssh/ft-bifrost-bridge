@@ -8,49 +8,46 @@ pub type ConfigSpendRedeemer {
   Retire
 }
 
+//The rev-5.4 fifteen-field Config datum (spec §Config datum). update_auth
+//comes first, because it is the field that governs every other one.
+//
+//`params` comes LAST, and deliberately. Every field before it is a scalar at a
+//frozen index; a nested record in the middle would have to be renumbered past
+//each time the datum grows. Appending after `params` instead of before it also
+//keeps the [LIB-3] append rule honest — the record never moves, so no reader
+//that already found it has to be rebuilt.
+//
+//Removed from the rev-5.1 layout (spec §Config datum, "Rev 5.1's fields ...
+//are all GONE"):
+//- bridged_token_asset_name: now the [CFG-1] constant "fSAT" in
+//  bifrost/constants.
+//- peg_in_close_verifier_script_hash: the SPI trie removes the close
+//  verifier for good; both close reasons become MPF proofs in peg-in.ak.
+//- both legit_treasury_movement_* hashes: vestigial, dummy on the deployed
+//  instance.
+//- min_stake: it was off-chain-only (the heimdall R2 registration gate had
+//  no on-chain reader), so it leaves the datum with the other unread fields.
+//- initial_btc_treasury_utxo: [BSS-4] takes the anchor from the bootstrap
+//  redeemer.
+//- leader_reward: no on-chain reader in this tree.
 pub type ConfigDatum {
-  bridged_token_policy_id: PolicyId,
-  bridged_token_asset_name: AssetName,
-  completed_peg_ins_merkle_tree_policy_id: PolicyId,
-  completed_peg_outs_merkle_tree_policy_id: PolicyId,
-  peg_in_withdraw_script_hash: ByteArray,
-  peg_out_withdraw_script_hash: ByteArray,
-  //Peg-in CLOSE verifier (F4/F5). Dormant until the F1-F6 milestone; a dummy
-  //hash has no reward account, so Cancel is cleanly unsatisfiable.
-  peg_in_close_verifier_script_hash: ByteArray,
-  legit_treasury_movement_and_peg_out_produced_verifier_script_hash: ByteArray,
-  legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash: ByteArray,
-  //Off-chain-only (heimdall R2 registration gate); no on-chain reader.
-  min_stake: Int,
   //Authority allowed to Update/Retire the config UTxO. None = frozen.
   update_auth: Option<AuthorizationMethod>,
-  //The initial (anchor) Bitcoin treasury outpoint the first Treasury Movement
-  //must spend: 36 bytes = txid (internal byte order) ++ vout (4-byte LE).
-  //Subsequent TMs chain from the previous Confirmed TM record instead.
-  //Re-pointable via config Update (e.g. after an emergency federation sweep).
-  initial_btc_treasury_utxo: ByteArray,
-  //-- Operational parameters (tunables; spec §Operational parameters). These
-  //-- are OFF-CHAIN consensus anchors / pinned-copy sources / skip-rule
-  //-- floors — no Aiken validator reads a current value here (the TM
-  //-- validator is the Scalus contract in binocular; the leader_reward pin,
-  //-- when enforced, is read there). Appended after upstream's #11 anchor.
-  //Exact miner fee rate (sat/vB) for deterministic TM construction.
-  fee_rate_sat_per_vb: Int,
-  //Floor (satoshi) for the per-peg-out protocol fee; the effective fee pins
-  //into each PegOutDatum at lock time.
-  per_pegout_fee: Int,
-  //Minimum bridged-token amount (satoshi) a PegOut may lock.
-  min_peg_out_fbtc: Int,
-  //TM poster's reward (lovelace); pinned into the TM record at post time and
-  //paid by each fBTC mint that claims against the Confirmed record.
-  leader_reward: Int,
-  //Epoch/TM schedule (all Int slots; spec §TM batches and the protocol
-  //schedule). Off-chain readers only, so it is one structured field rather
-  //than ten top-level slots; governance updates replace it wholesale,
-  //effective from the next epoch boundary.
-  schedule: ScheduleParams,
+  //fBTC policy id
+  bridged_token_policy: PolicyId,
+  //CPI trie NFT policy
+  completed_peg_ins_policy: PolicyId,
+  //Bridge state singleton NFT policy
+  bridge_state_policy: PolicyId,
+  //spec [CFG-2]: the TM validator hash (= TM NFT policy id). NO on-chain
+  //reader; published so off-chain readers can locate the TM address without
+  //a build-time constant. Changing it alone does NOT swap the TM validator:
+  //the singleton is compile-parameterized by this hash.
+  tm_script_hash: ByteArray,
+  peg_in_script_hash: ByteArray,
+  peg_out_script_hash: ByteArray,
   //-- Federation identity (ban policy + SPO registry). Off-chain readers only,
-  //-- like the tunables above; no Aiken validator reads a current value here.
+  //-- like the params below; no Aiken validator reads a current value here.
   //--
   //-- Published rather than derived, and that is the whole point. Every value
   //-- an SPO would otherwise hand-copy to locate these is an INPUT to the
@@ -71,14 +68,33 @@ pub type ConfigDatum {
   //The DEPLOYED spos_registry policy id; the registry address follows from it.
   spos_registry_policy_id: PolicyId,
   //The DEPLOYED treasury_info policy id. Worth publishing even though it is a
-  //pure function of (spos_registry policy, TM-NFT policy): every reader must
-  //apply BOTH parameters identically or it computes a different hash, a
-  //different address, and an unfindable state UTxO.
+  //pure function of the spos_registry policy alone (rev 5.4 dropped
+  //treasury_info's TM-NFT-policy parameter with the FederationReset branch
+  //that was its only reader): a reader must still apply that parameter to the
+  //same blueprint, and drift yields a different hash, a different address and
+  //an unfindable state UTxO rather than an error.
   treasury_info_policy_id: PolicyId,
   //Asset name of the treasury_info state NFT. Unlike every other field here it
   //is derivable from nothing at all — a name chosen at bootstrap — so
   //publishing it is the only way an SPO can avoid typing it.
   treasury_info_asset_name: AssetName,
+  //Operational parameters, one nested record so governance can replace it
+  //wholesale without renumbering its neighbours. Last field; see the note
+  //above the record.
+  params: ConfigParams,
+}
+
+//The tunable operational parameters (spec §Operational parameters).
+pub type ConfigParams {
+  //Exact miner fee rate (sat/vB) for deterministic TM construction.
+  fee_rate_sat_per_vb: Int,
+  //Floor (satoshi) for the per-peg-out protocol fee; the effective fee pins
+  //into each PegOutDatum at lock time.
+  per_pegout_fee: Int,
+  //Minimum bridged-token amount (satoshi) a PegOut may lock.
+  min_peg_out_fbtc: Int,
+  //Epoch/TM schedule. Off-chain readers only.
+  schedule: ScheduleParams,
 }
 
 //The tunable protocol schedule, E-relative slot values (spec §TM batches and
@@ -119,85 +135,85 @@ pub type ScheduleParams {
 // field.
 //----------------------------------------------------------------------------
 
-pub fn get_bridged_token_policy_id(config_fields: List<Data>) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 0))
-}
-
-pub fn get_bridged_token_asset_name(config_fields: List<Data>) -> AssetName {
-  builtin.un_b_data(safe_list_at(config_fields, 1))
-}
-
-pub fn get_completed_peg_ins_merkle_tree_policy_id(
-  config_fields: List<Data>,
-) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 2))
-}
-
-//v2 semantics (2026-07): the trie is written at TM Confirm, keyed by POR id;
-//Complete/Cancel reference it. The migration Update swapped the value to the
-//rewritten validator's hash.
-pub fn get_completed_peg_outs_merkle_tree_policy_id(
-  config_fields: List<Data>,
-) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 3))
-}
-
-pub fn get_peg_in_withdraw_script_hash(config_fields: List<Data>) -> ByteArray {
-  builtin.un_b_data(safe_list_at(config_fields, 4))
-}
-
-pub fn get_peg_out_withdraw_script_hash(config_fields: List<Data>) -> ByteArray {
-  builtin.un_b_data(safe_list_at(config_fields, 5))
-}
-
-pub fn get_peg_in_close_verifier_script_hash(
-  config_fields: List<Data>,
-) -> ByteArray {
-  builtin.un_b_data(safe_list_at(config_fields, 6))
-}
-
-pub fn get_legit_treasury_movement_and_peg_out_produced_verifier_script_hash(
-  config_fields: List<Data>,
-) -> ByteArray {
-  builtin.un_b_data(safe_list_at(config_fields, 7))
-}
-
-pub fn get_legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash(
-  config_fields: List<Data>,
-) -> ByteArray {
-  builtin.un_b_data(safe_list_at(config_fields, 8))
-}
-
-pub fn get_min_stake(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 9))
-}
-
 pub fn get_update_auth(
   config_fields: List<Data>,
 ) -> Option<AuthorizationMethod> {
   expect update_auth: Option<AuthorizationMethod> =
-    safe_list_at(config_fields, 10)
+    safe_list_at(config_fields, 0)
   update_auth
 }
 
-pub fn get_initial_btc_treasury_utxo(config_fields: List<Data>) -> ByteArray {
+pub fn get_bridged_token_policy(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 1))
+}
+
+pub fn get_completed_peg_ins_policy(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 2))
+}
+
+pub fn get_bridge_state_policy(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 3))
+}
+
+//spec [CFG-2]: NO on-chain reader. Off-chain/test use only; it exists so the
+//config_getters_match_datum_fields test pins index 4, and so an off-chain
+//Aiken consumer never hard-codes the index.
+pub fn get_tm_script_hash(config_fields: List<Data>) -> ByteArray {
+  builtin.un_b_data(safe_list_at(config_fields, 4))
+}
+
+pub fn get_peg_in_script_hash(config_fields: List<Data>) -> ByteArray {
+  builtin.un_b_data(safe_list_at(config_fields, 5))
+}
+
+pub fn get_peg_out_script_hash(config_fields: List<Data>) -> ByteArray {
+  builtin.un_b_data(safe_list_at(config_fields, 6))
+}
+
+pub fn get_spo_bans_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 7))
+}
+
+pub fn get_base_ban_duration_ms(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 8))
+}
+
+pub fn get_max_faults_before_permanent(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 9))
+}
+
+pub fn get_max_validity_window_ms(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 10))
+}
+
+pub fn get_spos_registry_policy_id(config_fields: List<Data>) -> PolicyId {
   builtin.un_b_data(safe_list_at(config_fields, 11))
 }
 
+pub fn get_treasury_info_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 12))
+}
+
+pub fn get_treasury_info_asset_name(config_fields: List<Data>) -> AssetName {
+  builtin.un_b_data(safe_list_at(config_fields, 13))
+}
+
+//The nested params record (ConfigDatum field 14, the last one) as its raw
+//fields list. Indexes inside it live only in the getters below.
+fn get_params_fields(config_fields: List<Data>) -> List<Data> {
+  builtin.unconstr_fields(safe_list_at(config_fields, 14))
+}
+
 pub fn get_fee_rate_sat_per_vb(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 12))
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 0))
 }
 
 pub fn get_per_pegout_fee(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 13))
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 1))
 }
 
 pub fn get_min_peg_out_fbtc(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 14))
-}
-
-pub fn get_leader_reward(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 15))
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 2))
 }
 
 //Off-chain/test use only. Unlike the other getters this is a FULL cast of
@@ -205,40 +221,17 @@ pub fn get_leader_reward(config_fields: List<Data>) -> Int {
 //ScheduleParams' inner shape (defeating the point of nesting it). No Aiken
 //validator reads the schedule; keep it that way.
 pub fn get_schedule(config_fields: List<Data>) -> ScheduleParams {
-  expect schedule: ScheduleParams = safe_list_at(config_fields, 16)
+  expect schedule: ScheduleParams =
+    safe_list_at(get_params_fields(config_fields), 3)
   schedule
 }
 
-pub fn get_spo_bans_policy_id(config_fields: List<Data>) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 17))
-}
-
-pub fn get_base_ban_duration_ms(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 18))
-}
-
-pub fn get_max_faults_before_permanent(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 19))
-}
-
-pub fn get_max_validity_window_ms(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 20))
-}
-
-pub fn get_spos_registry_policy_id(config_fields: List<Data>) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 21))
-}
-
-pub fn get_treasury_info_policy_id(config_fields: List<Data>) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 22))
-}
-
-pub fn get_treasury_info_asset_name(config_fields: List<Data>) -> AssetName {
-  builtin.un_b_data(safe_list_at(config_fields, 23))
-}
-
-//Pins every getter index to its ConfigDatum record field: reordering record
-//fields or getter indexes independently makes this fail.
+//Pins every getter index to its ConfigDatum record field. The fixture is a
+//real ConfigDatum record, serialized with builtin.unconstr_fields, and each
+//getter's result is compared against the record field it must read. Every
+//field carries a distinct value, so a reordering of the record definition
+//relative to the getter indexes fails this test even when the swapped
+//fields share a type.
 test config_getters_match_datum_fields() {
   let schedule =
     ScheduleParams {
@@ -253,59 +246,66 @@ test config_getters_match_datum_fields() {
       final_tm_cutoff: 345600,
       stability_window: 129600,
     }
-  let datum =
-    ConfigDatum {
-      bridged_token_policy_id: #"aa00",
-      bridged_token_asset_name: #"aa01",
-      completed_peg_ins_merkle_tree_policy_id: #"aa02",
-      completed_peg_outs_merkle_tree_policy_id: #"aa03",
-      peg_in_withdraw_script_hash: #"aa04",
-      peg_out_withdraw_script_hash: #"aa05",
-      peg_in_close_verifier_script_hash: #"aa06",
-      legit_treasury_movement_and_peg_out_produced_verifier_script_hash: #"aa07",
-      legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash: #"aa08",
-      min_stake: 9,
-      update_auth: Some(CardanoSignature { hash: #"aa10" }),
-      initial_btc_treasury_utxo: #"aa11",
+  let params =
+    ConfigParams {
       fee_rate_sat_per_vb: 12,
       per_pegout_fee: 13,
       min_peg_out_fbtc: 14,
-      leader_reward: 15,
       schedule,
-      spo_bans_policy_id: #"aa17",
-      base_ban_duration_ms: 18,
-      max_faults_before_permanent: 19,
-      max_validity_window_ms: 20,
-      spos_registry_policy_id: #"aa21",
-      treasury_info_policy_id: #"aa22",
-      treasury_info_asset_name: #"aa23",
+    }
+  let datum =
+    ConfigDatum {
+      update_auth: Some(CardanoSignature { hash: #"aa10" }),
+      bridged_token_policy: #"aa01",
+      completed_peg_ins_policy: #"aa02",
+      bridge_state_policy: #"aa03",
+      tm_script_hash: #"aa04",
+      peg_in_script_hash: #"aa05",
+      peg_out_script_hash: #"aa06",
+      spo_bans_policy_id: #"aa07",
+      base_ban_duration_ms: 8,
+      max_faults_before_permanent: 9,
+      max_validity_window_ms: 10,
+      spos_registry_policy_id: #"aa11",
+      treasury_info_policy_id: #"aa12",
+      treasury_info_asset_name: "aa13",
+      params,
     }
   let datum_data: Data = datum
   let fields = builtin.unconstr_fields(datum_data)
   and {
-    get_bridged_token_policy_id(fields) == datum.bridged_token_policy_id,
-    get_bridged_token_asset_name(fields) == datum.bridged_token_asset_name,
-    get_completed_peg_ins_merkle_tree_policy_id(fields) == datum.completed_peg_ins_merkle_tree_policy_id,
-    get_completed_peg_outs_merkle_tree_policy_id(fields) == datum.completed_peg_outs_merkle_tree_policy_id,
-    get_peg_in_withdraw_script_hash(fields) == datum.peg_in_withdraw_script_hash,
-    get_peg_out_withdraw_script_hash(fields) == datum.peg_out_withdraw_script_hash,
-    get_peg_in_close_verifier_script_hash(fields) == datum.peg_in_close_verifier_script_hash,
-    get_legit_treasury_movement_and_peg_out_produced_verifier_script_hash(fields) == datum.legit_treasury_movement_and_peg_out_produced_verifier_script_hash,
-    get_legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash(fields) == datum.legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash,
-    get_min_stake(fields) == datum.min_stake,
+    //index 0
     get_update_auth(fields) == datum.update_auth,
-    get_initial_btc_treasury_utxo(fields) == datum.initial_btc_treasury_utxo,
-    get_fee_rate_sat_per_vb(fields) == datum.fee_rate_sat_per_vb,
-    get_per_pegout_fee(fields) == datum.per_pegout_fee,
-    get_min_peg_out_fbtc(fields) == datum.min_peg_out_fbtc,
-    get_leader_reward(fields) == datum.leader_reward,
-    get_schedule(fields) == datum.schedule,
+    //index 1
+    get_bridged_token_policy(fields) == datum.bridged_token_policy,
+    //index 2
+    get_completed_peg_ins_policy(fields) == datum.completed_peg_ins_policy,
+    //index 3
+    get_bridge_state_policy(fields) == datum.bridge_state_policy,
+    //index 4, spec [CFG-2]
+    get_tm_script_hash(fields) == datum.tm_script_hash,
+    //index 5
+    get_peg_in_script_hash(fields) == datum.peg_in_script_hash,
+    //index 6
+    get_peg_out_script_hash(fields) == datum.peg_out_script_hash,
+    //index 7
     get_spo_bans_policy_id(fields) == datum.spo_bans_policy_id,
+    //index 8
     get_base_ban_duration_ms(fields) == datum.base_ban_duration_ms,
+    //index 9
     get_max_faults_before_permanent(fields) == datum.max_faults_before_permanent,
+    //index 10
     get_max_validity_window_ms(fields) == datum.max_validity_window_ms,
+    //index 11
     get_spos_registry_policy_id(fields) == datum.spos_registry_policy_id,
+    //index 12
     get_treasury_info_policy_id(fields) == datum.treasury_info_policy_id,
+    //index 13
     get_treasury_info_asset_name(fields) == datum.treasury_info_asset_name,
+    //index 14, nested params record
+    get_fee_rate_sat_per_vb(fields) == params.fee_rate_sat_per_vb,
+    get_per_pegout_fee(fields) == params.per_pegout_fee,
+    get_min_peg_out_fbtc(fields) == params.min_peg_out_fbtc,
+    get_schedule(fields) == params.schedule,
   }
 }

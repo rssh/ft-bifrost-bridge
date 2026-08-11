@@ -3,6 +3,7 @@ use aiken/collection/dict
 use aiken/collection/list
 use aiken/crypto
 use aiken/merkle_patricia_forestry as mpf
+use bifrost/types/completed_peg_ins.{CompletedPegInsTrieDatum}
 use cardano/address.{Script}
 use cardano/assets.{AssetName, PolicyId, Value, quantity_of, tokens}
 use cardano/transaction.{InlineDatum, Input, Output, OutputReference}
@@ -80,13 +81,26 @@ pub fn find_singleton_asset_output_at_script(
 }
 
 //Expects the merkle root to be the first field of the InlineDatum
+/// The completed-peg-ins trie from a CPI-trie UTxO's inline datum.
+///
+/// A TYPED decode, not a blind field-0 read. The rule is the one [LIB-1]
+/// states for the singleton and [CTM-27] states for Confirm, and it applies to
+/// every datum in this tree EXCEPT `ConfigDatum`: only the Config UTxO must
+/// stay append-extensible, because every contract is parameterized by its NFT
+/// and so the Config alone cannot be swapped. Every other datum sits behind a
+/// Config-updatable script hash, so pinning its exact shape costs nothing —
+/// a datum change ships as a new validator plus a Config Update.
+///
+/// The blind form this replaces (`unconstr_fields |> head_list |> un_b_data`)
+/// accepted ANY constructor tag and ANY arity. That is not academic here: the
+/// CONTINUING output's datum is chosen by whoever builds the completion, so
+/// `Constr 5 [root, junk]` would have been accepted at the trie address and
+/// every stricter reader downstream — on-chain or off — would then fail on a
+/// datum the protocol never describes.
 pub fn get_mpf_from_output(output: Output) -> mpf.MerklePatriciaForestry {
   expect InlineDatum(datum) = output.datum
-  datum
-    |> builtin.unconstr_fields
-    |> builtin.head_list
-    |> builtin.un_b_data
-    |> mpf.from_root
+  expect trie: CompletedPegInsTrieDatum = datum
+  mpf.from_root(trie.root)
 }
 
 pub fn bitcoin_hash(bytes: ByteArray) -> ByteArray {

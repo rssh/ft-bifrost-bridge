@@ -368,3 +368,105 @@ peg-out address holds no UTxO before the switch; see the runbook, step 4b.
   golden bytes; hint encode/decode round-trip; reconstruction happy path +
   per-TM root verification + fallback matcher on a garbled hint; freshness
   boundaries; por_id golden vector shared with Aiken.
+
+## Addendum (rev 5.3, 2026-08-05): garbage collection of Unconfirmed TM records
+
+Status: proposed - pending approval.
+
+### Problem
+
+`TreasuryMovementValidator.spend` accepts exactly one spend of an
+`Unconfirmed` record: the Confirm transition. A posted TM that never confirms
+on Bitcoin - a failed broadcast, a replaced (RBF'd) transaction, a losing
+race for the treasury outpoint, or any test post - is therefore locked
+forever, and so is its min-ADA and its TM NFT. On a test network this
+accumulates through every campaign.
+
+The `Confirmed` branch already has the right rule (creator + grace period +
+NFT burn + single-TM-input containment), and no tooling has ever exercised
+even that.
+
+### Design
+
+Extend the GC rule to the `Unconfirmed` variant, unchanged in substance:
+
+- The spender MUST burn the TM NFT (`mint == -1` under the TM policy).
+- The transaction MUST spend exactly ONE input at the TM script address
+  (`tmInputCount == 1`) - the existing containment rule that stops a second,
+  fungible TM NFT from escaping to a fabricated record.
+- The transaction MUST be signed by the record's `creator`.
+- The validity interval MUST be entirely after `created + GcGraceMs` — the
+  SAME 30-day constant the `Confirmed` path uses.
+
+**Dispatch.** The spend redeemer becomes an explicit enum
+`TmSpendRedeemer = Confirm(TmConfirmRedeemer) | Gc`, mirroring
+`TmMintRedeemer`. The `Unconfirmed` branch dispatches on it; the `Confirmed`
+branch requires `Gc`. Rejected alternative: inferring the intent from the
+mint sign (a Confirm never burns). It is safe - both rule sets are checked in
+full either way - but the spender's intent should be declared, not deduced.
+
+**Grace period.** ONE constant for both variants: the existing 30-day
+`GcGraceMs`. No second timer is introduced.
+
+> **Why one period, and what it costs.** A shorter period for `Unconfirmed`
+> records would be safe: the 30 days on a `Confirmed` record exist to protect
+> THIRD PARTIES (peg-in completion references it as proof material), whereas
+> nothing third-party depends on an `Unconfirmed` record — it enables exactly
+> one action, Confirm, and Confirm is permissionlessly re-enabled by
+> re-posting the same TM, because the mint linkage still holds (input 0 still
+> spends the predecessor's output 0). The protocol nevertheless keeps a single
+> constant: one timer is one rule to audit, to document, and to get right,
+> and the reclaimed value is dust. The cost is that a failed or test post
+> holds its min-ADA for 30 days like any other record. `created` is anchored
+> to the mint transaction's validity upper bound, so neither timer can be
+> shortcut by backdating.
+
+**What GC of an Unconfirmed record cannot break:**
+
+- The TM chain: `TmMintRedeemer.Chain(i)` anchors on a `Confirmed`
+  predecessor, never an `Unconfirmed` one.
+- CPO trie reconstruction: it reads the DA hint from HISTORICAL outputs at
+  the TM address. A spent output's inline datum stays in chain history
+  whether Confirm or GC spent it. A never-confirmed record has no matching
+  `Confirmed` record and is ignored by the walk.
+- The CPO singleton: the trie validator gates its spend on a tag-0 input AND
+  a tag-1 output. A GC transaction burns the NFT and produces no tag-1
+  output, so it can never touch the trie.
+- `peg_in.ak` and `treasury.ak::FederationReset`: both read `Confirmed`
+  records only.
+
+**Batching is out of scope.** GC stays one record per transaction, because
+`tmInputCount == 1` is the containment invariant that keeps a second NFT from
+escaping. Batching would require replacing it with a per-transaction
+accounting rule (burn count equals TM input count, and no TM NFT in any
+output), which is a larger change for a rare operation.
+
+**Residual risk (accepted).** A creator may GC a record whose Bitcoin
+transaction later confirms. Recovery is a re-post plus a Confirm, both
+permissionless. The operational rule for `Confirmed` records - never GC the
+chain tip - is unaffected and still stands.
+
+### Tooling: one generalized sweeper
+
+Neither GC path has ever had a command, and peg-out completion already has a
+sweeper of its own (`PorSweeper`, added with the attested-root work). Both are
+the same job — reclaim the min-ADA of on-chain state that has finished its
+purpose, one item per transaction, permissionlessly or by the creator's own
+key. They are unified behind ONE sweeper rather than grown separately.
+
+- A **sweep source** contributes candidates: an id, a human reason, an
+  eligibility time, and a transaction builder. Two sources ship:
+  `PegOutCompletionSource` (paid PORs — membership proof, burn the fBTC,
+  keep the MIN_ADA; permissionless) and `TmRecordGcSource` (`Unconfirmed`
+  and `Confirmed` TM records past `GcGraceMs` whose `creator` is the
+  operator's own key — burn the NFT, keep the min-ADA).
+- The **sweeper core** owns everything neither source should re-implement:
+  the scan tick, dry-run, per-item error isolation, in-flight suppression,
+  the halted/degraded state, and operator reporting. `PorSweeper`'s existing
+  machinery is the seed — it already has all of it.
+- **Trie-mirror state and the confirm chaining stay with the peg-out source
+  only.** TM GC needs no proofs at all, so a halted mirror MUST NOT stop TM
+  GC: sources fail independently.
+- **The chain tip is protected.** The sweeper MUST NOT GC the `Confirmed`
+  record no other record chains from, absent an explicit operator override.
+  This is the standing operational rule the validator cannot enforce itself.

@@ -260,6 +260,7 @@ fn t_config_datum() -> ConfigDatum {
     spos_registry_policy_id: #"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     treasury_info_policy_id: #"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     treasury_info_asset_name: "TMTx",
+    initial_btc_treasury_value_sat: 5_000_000,
   }
 }
 

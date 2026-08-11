@@ -79,6 +79,21 @@ pub type ConfigDatum {
   //is derivable from nothing at all — a name chosen at bootstrap — so
   //publishing it is the only way an SPO can avoid typing it.
   treasury_info_asset_name: AssetName,
+  //Value in satoshi of the anchor outpoint at #11. It is an instance CONSTANT
+  //by construction — a Bitcoin output's value is immutable once created — so it
+  //is a fact about this bridge exactly as much as the outpoint is, and belongs
+  //beside it rather than in every SPO's local file.
+  //
+  //Publishing it is what lets an SPO price the FIRST Treasury Movement without
+  //a Bitcoin node of its own: every later TM takes the treasury value from the
+  //previous Confirmed TM's own record, so the genesis TM is the only gap.
+  //
+  //THE TWO MOVE TOGETHER OR NOT AT ALL. An Update that re-anchors #11 without
+  //also setting this leaves a Config that is internally inconsistent and prices
+  //the genesis TM wrong. Nothing on chain can catch that — the amount is a
+  //Bitcoin fact and this is Cardano — so the writing tool must refuse to change
+  //one without the other.
+  initial_btc_treasury_value_sat: Int,
 }
 
 //The tunable protocol schedule, E-relative slot values (spec §TM batches and
@@ -172,11 +187,11 @@ pub fn get_min_stake(config_fields: List<Data>) -> Int {
   builtin.un_i_data(safe_list_at(config_fields, 9))
 }
 
-pub fn get_update_auth(
-  config_fields: List<Data>,
-) -> Option<AuthorizationMethod> {
-  expect update_auth: Option<AuthorizationMethod> =
-    safe_list_at(config_fields, 10)
+pub fn get_update_auth(config_fields: List<Data>) -> Option<AuthorizationMethod> {
+  expect update_auth: Option<AuthorizationMethod> = safe_list_at(
+    config_fields,
+    10,
+  )
   update_auth
 }
 
@@ -237,49 +252,52 @@ pub fn get_treasury_info_asset_name(config_fields: List<Data>) -> AssetName {
   builtin.un_b_data(safe_list_at(config_fields, 23))
 }
 
+pub fn get_initial_btc_treasury_value_sat(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(config_fields, 24))
+}
+
 //Pins every getter index to its ConfigDatum record field: reordering record
 //fields or getter indexes independently makes this fail.
 test config_getters_match_datum_fields() {
-  let schedule =
-    ScheduleParams {
-      dkg_r1_deadline: 3600,
-      dkg_r2_deadline: 7200,
-      update_y_deadline: 10800,
-      tm_batch_interval: 21600,
-      sign_r1_window: 1800,
-      sign_r2_window: 1800,
-      leader_slot_t: 600,
-      tm_recovery_window: 129600,
-      final_tm_cutoff: 345600,
-      stability_window: 129600,
-    }
-  let datum =
-    ConfigDatum {
-      bridged_token_policy_id: #"aa00",
-      bridged_token_asset_name: #"aa01",
-      completed_peg_ins_merkle_tree_policy_id: #"aa02",
-      completed_peg_outs_merkle_tree_policy_id: #"aa03",
-      peg_in_withdraw_script_hash: #"aa04",
-      peg_out_withdraw_script_hash: #"aa05",
-      peg_in_close_verifier_script_hash: #"aa06",
-      legit_treasury_movement_and_peg_out_produced_verifier_script_hash: #"aa07",
-      legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash: #"aa08",
-      min_stake: 9,
-      update_auth: Some(CardanoSignature { hash: #"aa10" }),
-      initial_btc_treasury_utxo: #"aa11",
-      fee_rate_sat_per_vb: 12,
-      per_pegout_fee: 13,
-      min_peg_out_fbtc: 14,
-      leader_reward: 15,
-      schedule,
-      spo_bans_policy_id: #"aa17",
-      base_ban_duration_ms: 18,
-      max_faults_before_permanent: 19,
-      max_validity_window_ms: 20,
-      spos_registry_policy_id: #"aa21",
-      treasury_info_policy_id: #"aa22",
-      treasury_info_asset_name: #"aa23",
-    }
+  let schedule = ScheduleParams {
+    dkg_r1_deadline: 3600,
+    dkg_r2_deadline: 7200,
+    update_y_deadline: 10800,
+    tm_batch_interval: 21600,
+    sign_r1_window: 1800,
+    sign_r2_window: 1800,
+    leader_slot_t: 600,
+    tm_recovery_window: 129600,
+    final_tm_cutoff: 345600,
+    stability_window: 129600,
+  }
+  let datum = ConfigDatum {
+    bridged_token_policy_id: #"aa00",
+    bridged_token_asset_name: #"aa01",
+    completed_peg_ins_merkle_tree_policy_id: #"aa02",
+    completed_peg_outs_merkle_tree_policy_id: #"aa03",
+    peg_in_withdraw_script_hash: #"aa04",
+    peg_out_withdraw_script_hash: #"aa05",
+    peg_in_close_verifier_script_hash: #"aa06",
+    legit_treasury_movement_and_peg_out_produced_verifier_script_hash: #"aa07",
+    legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash: #"aa08",
+    min_stake: 9,
+    update_auth: Some(CardanoSignature { hash: #"aa10" }),
+    initial_btc_treasury_utxo: #"aa11",
+    fee_rate_sat_per_vb: 12,
+    per_pegout_fee: 13,
+    min_peg_out_fbtc: 14,
+    leader_reward: 15,
+    schedule,
+    spo_bans_policy_id: #"aa17",
+    base_ban_duration_ms: 18,
+    max_faults_before_permanent: 19,
+    max_validity_window_ms: 20,
+    spos_registry_policy_id: #"aa21",
+    treasury_info_policy_id: #"aa22",
+    treasury_info_asset_name: #"aa23",
+    initial_btc_treasury_value_sat: 24,
+  }
   let datum_data: Data = datum
   let fields = builtin.unconstr_fields(datum_data)
   and {
@@ -290,8 +308,12 @@ test config_getters_match_datum_fields() {
     get_peg_in_withdraw_script_hash(fields) == datum.peg_in_withdraw_script_hash,
     get_peg_out_withdraw_script_hash(fields) == datum.peg_out_withdraw_script_hash,
     get_peg_in_close_verifier_script_hash(fields) == datum.peg_in_close_verifier_script_hash,
-    get_legit_treasury_movement_and_peg_out_produced_verifier_script_hash(fields) == datum.legit_treasury_movement_and_peg_out_produced_verifier_script_hash,
-    get_legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash(fields) == datum.legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash,
+    get_legit_treasury_movement_and_peg_out_produced_verifier_script_hash(
+      fields,
+    ) == datum.legit_treasury_movement_and_peg_out_produced_verifier_script_hash,
+    get_legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash(
+      fields,
+    ) == datum.legit_treasury_movement_and_peg_out_not_produced_verifier_script_hash,
     get_min_stake(fields) == datum.min_stake,
     get_update_auth(fields) == datum.update_auth,
     get_initial_btc_treasury_utxo(fields) == datum.initial_btc_treasury_utxo,
@@ -307,5 +329,6 @@ test config_getters_match_datum_fields() {
     get_spos_registry_policy_id(fields) == datum.spos_registry_policy_id,
     get_treasury_info_policy_id(fields) == datum.treasury_info_policy_id,
     get_treasury_info_asset_name(fields) == datum.treasury_info_asset_name,
+    get_initial_btc_treasury_value_sat(fields) == datum.initial_btc_treasury_value_sat,
   }
 }

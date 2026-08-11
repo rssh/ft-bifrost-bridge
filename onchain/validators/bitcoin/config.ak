@@ -67,17 +67,16 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
     let old_fields = builtin.unconstr_fields(datum_raw)
     //None = permanently frozen: unspendable, the pre-governance behavior
     expect Some(update_auth) = configType.get_update_auth(old_fields)
-    let authorized =
-      authorizer.authorize_action(
-        authorizer.create_auth(
-          update_auth,
-          self.inputs,
-          self.reference_inputs,
-          self.withdrawals,
-          self.extra_signatories,
-          self.mint,
-        ),
-      )
+    let authorized = authorizer.authorize_action(
+      authorizer.create_auth(
+        update_auth,
+        self.inputs,
+        self.reference_inputs,
+        self.withdrawals,
+        self.extra_signatories,
+        self.mint,
+      ),
+    )
     //Mint policy and spend script share this hash, so the own payment
     //credential is also the config NFT policy id
     expect Some(own_input) = find_input(self.inputs, own_ref)
@@ -85,13 +84,10 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
     when redeemer is {
       Update -> {
         //Exactly one continuing output at the config credential
-        expect [config_output] =
-          list.filter(
-            self.outputs,
-            fn(output) {
-              output.address.payment_credential == Script(own_hash)
-            },
-          )
+        expect [config_output] = list.filter(
+          self.outputs,
+          fn(output) { output.address.payment_credential == Script(own_hash) },
+        )
         //ANY inline datum is allowed: the authority is the root of trust and
         //datum shape evolution is an explicit goal (readers use positional
         //getters, see bifrost/types/config). The authority is responsible
@@ -191,6 +187,7 @@ fn t_datum(update_auth) -> ConfigDatum {
     spos_registry_policy_id: #"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     treasury_info_policy_id: #"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     treasury_info_asset_name: "TMTx",
+    initial_btc_treasury_value_sat: 5_000_000,
   }
 }
 
@@ -262,24 +259,22 @@ test update_happy_path_withdraw_script_auth() {
   let gov_hash = #"ee111111111111111111111111111111111111111111111111111111"
   let old_datum = t_datum(Some(CardanoWithdrawScript { hash: gov_hash }))
   let new_datum = ConfigDatum { ..old_datum, min_stake: 42 }
-  let tx =
-    Transaction {
-      ..placeholder,
-      inputs: [t_own_input(old_datum)],
-      outputs: [t_config_output(new_datum)],
-      withdrawals: [Pair(Script(gov_hash), 0)],
-    }
+  let tx = Transaction {
+    ..placeholder,
+    inputs: [t_own_input(old_datum)],
+    outputs: [t_config_output(new_datum)],
+    withdrawals: [Pair(Script(gov_hash), 0)],
+  }
   t_spend(old_datum, Update, tx)
 }
 
 test update_rotates_update_auth() {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
-  let new_auth =
-    Some(
-      CardanoWithdrawScript {
-        hash: #"ee111111111111111111111111111111111111111111111111111111",
-      },
-    )
+  let new_auth = Some(
+    CardanoWithdrawScript {
+      hash: #"ee111111111111111111111111111111111111111111111111111111",
+    },
+  )
   let new_datum = ConfigDatum { ..old_datum, update_auth: new_auth }
   let tx = t_update_tx(old_datum, [t_config_output(new_datum)])
   t_spend(old_datum, Update, tx)
@@ -295,13 +290,12 @@ test update_renounces_to_none() {
 test update_rejects_missing_signature() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
   let new_datum = ConfigDatum { ..old_datum, min_stake: 42 }
-  let tx =
-    Transaction {
-      ..placeholder,
-      inputs: [t_own_input(old_datum)],
-      outputs: [t_config_output(new_datum)],
-      extra_signatories: [],
-    }
+  let tx = Transaction {
+    ..placeholder,
+    inputs: [t_own_input(old_datum)],
+    outputs: [t_config_output(new_datum)],
+    extra_signatories: [],
+  }
   t_spend(old_datum, Update, tx)
 }
 
@@ -316,16 +310,15 @@ test update_rejects_nft_not_returned() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
   let new_datum = ConfigDatum { ..old_datum, min_stake: 42 }
   //Continuing output goes to a foreign credential instead of the config script
-  let stolen_output =
-    Output {
-      ..t_config_output(new_datum),
-      address: Address {
-        payment_credential: Script(
-          #"ff111111111111111111111111111111111111111111111111111111",
-        ),
-        stake_credential: None,
-      },
-    }
+  let stolen_output = Output {
+    ..t_config_output(new_datum),
+    address: Address {
+      payment_credential: Script(
+        #"ff111111111111111111111111111111111111111111111111111111",
+      ),
+      stake_credential: None,
+    },
+  }
   let tx = t_update_tx(old_datum, [stolen_output])
   t_spend(old_datum, Update, tx)
 }
@@ -333,12 +326,11 @@ test update_rejects_nft_not_returned() fail {
 test update_rejects_nft_quantity_not_one() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
   let new_datum = ConfigDatum { ..old_datum, min_stake: 42 }
-  let doubled_nft_output =
-    Output {
-      ..t_config_output(new_datum),
-      value: assets.from_lovelace(2_000_000)
-        |> assets.add(t_own_hash, t_asset_name, 2),
-    }
+  let doubled_nft_output = Output {
+    ..t_config_output(new_datum),
+    value: assets.from_lovelace(2_000_000)
+      |> assets.add(t_own_hash, t_asset_name, 2),
+  }
   let tx = t_update_tx(old_datum, [doubled_nft_output])
   t_spend(old_datum, Update, tx)
 }
@@ -347,12 +339,11 @@ test update_rejects_nft_quantity_not_one() fail {
 //including the bridged-token identity
 test update_allows_changing_bridged_token_identity() {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
-  let new_datum =
-    ConfigDatum {
-      ..old_datum,
-      bridged_token_policy_id: #"ff222222222222222222222222222222222222222222222222222222",
-      bridged_token_asset_name: "fSAT2",
-    }
+  let new_datum = ConfigDatum {
+    ..old_datum,
+    bridged_token_policy_id: #"ff222222222222222222222222222222222222222222222222222222",
+    bridged_token_asset_name: "fSAT2",
+  }
   let tx = t_update_tx(old_datum, [t_config_output(new_datum)])
   t_spend(old_datum, Update, tx)
 }
@@ -361,14 +352,10 @@ test update_allows_changing_bridged_token_identity() {
 test update_allows_appending_datum_fields() {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
   let old_datum_data: Data = old_datum
-  let extended_datum =
-    builtin.constr_data(
-      0,
-      list.concat(
-        builtin.unconstr_fields(old_datum_data),
-        [builtin.i_data(99)],
-      ),
-    )
+  let extended_datum = builtin.constr_data(
+    0,
+    list.concat(builtin.unconstr_fields(old_datum_data), [builtin.i_data(99)]),
+  )
   let tx = t_update_tx(old_datum, [t_config_output_raw(extended_datum)])
   t_spend(old_datum, Update, tx)
 }
@@ -376,18 +363,17 @@ test update_allows_appending_datum_fields() {
 test update_rejects_changed_stake_credential() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
   let new_datum = ConfigDatum { ..old_datum, min_stake: 42 }
-  let drifted_output =
-    Output {
-      ..t_config_output(new_datum),
-      address: Address {
-        payment_credential: Script(t_own_hash),
-        stake_credential: Some(
-          Inline(
-            Script(#"ff333333333333333333333333333333333333333333333333333333"),
-          ),
+  let drifted_output = Output {
+    ..t_config_output(new_datum),
+    address: Address {
+      payment_credential: Script(t_own_hash),
+      stake_credential: Some(
+        Inline(
+          Script(#"ff333333333333333333333333333333333333333333333333333333"),
         ),
-      },
-    }
+      ),
+    },
+  }
   let tx = t_update_tx(old_datum, [drifted_output])
   t_spend(old_datum, Update, tx)
 }
@@ -395,17 +381,16 @@ test update_rejects_changed_stake_credential() fail {
 test update_rejects_added_foreign_tokens() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
   let new_datum = ConfigDatum { ..old_datum, min_stake: 42 }
-  let stuffed_output =
-    Output {
-      ..t_config_output(new_datum),
-      value: assets.from_lovelace(2_000_000)
-        |> assets.add(t_own_hash, t_asset_name, 1)
-        |> assets.add(
-            #"ff444444444444444444444444444444444444444444444444444444",
-            "junk",
-            1,
-          ),
-    }
+  let stuffed_output = Output {
+    ..t_config_output(new_datum),
+    value: assets.from_lovelace(2_000_000)
+      |> assets.add(t_own_hash, t_asset_name, 1)
+      |> assets.add(
+          #"ff444444444444444444444444444444444444444444444444444444",
+          "junk",
+          1,
+        ),
+  }
   let tx = t_update_tx(old_datum, [stuffed_output])
   t_spend(old_datum, Update, tx)
 }
@@ -413,13 +398,12 @@ test update_rejects_added_foreign_tokens() fail {
 test update_rejects_smuggled_own_policy_token() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
   let new_datum = ConfigDatum { ..old_datum, min_stake: 42 }
-  let smuggled_output =
-    Output {
-      ..t_config_output(new_datum),
-      value: assets.from_lovelace(2_000_000)
-        |> assets.add(t_own_hash, t_asset_name, 1)
-        |> assets.add(t_own_hash, "fake-config-marker", 1),
-    }
+  let smuggled_output = Output {
+    ..t_config_output(new_datum),
+    value: assets.from_lovelace(2_000_000)
+      |> assets.add(t_own_hash, t_asset_name, 1)
+      |> assets.add(t_own_hash, "fake-config-marker", 1),
+  }
   let tx = t_update_tx(old_datum, [smuggled_output])
   t_spend(old_datum, Update, tx)
 }
@@ -427,11 +411,10 @@ test update_rejects_smuggled_own_policy_token() fail {
 test update_rejects_two_config_outputs() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
   let new_datum = ConfigDatum { ..old_datum, min_stake: 42 }
-  let decoy_output =
-    Output {
-      ..t_config_output(new_datum),
-      value: assets.from_lovelace(2_000_000),
-    }
+  let decoy_output = Output {
+    ..t_config_output(new_datum),
+    value: assets.from_lovelace(2_000_000),
+  }
   let tx = t_update_tx(old_datum, [t_config_output(new_datum), decoy_output])
   t_spend(old_datum, Update, tx)
 }
@@ -441,11 +424,10 @@ test update_rejects_two_config_outputs() fail {
 //permissionlessly spendable, a garbage hash freezes it)
 test update_allows_any_update_auth_rotation() {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
-  let new_datum =
-    ConfigDatum {
-      ..old_datum,
-      update_auth: Some(CardanoSpendScript { hash: t_own_hash }),
-    }
+  let new_datum = ConfigDatum {
+    ..old_datum,
+    update_auth: Some(CardanoSpendScript { hash: t_own_hash }),
+  }
   let tx = t_update_tx(old_datum, [t_config_output(new_datum)])
   t_spend(old_datum, Update, tx)
 }
@@ -455,8 +437,10 @@ test update_allows_any_update_auth_rotation() {
 //as Option<AuthorizationMethod>, otherwise the config freezes.
 test update_allows_arbitrary_datum_shape() {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
-  let arbitrary_output =
-    Output { ..t_config_output(old_datum), datum: InlineDatum(42) }
+  let arbitrary_output = Output {
+    ..t_config_output(old_datum),
+    datum: InlineDatum(42),
+  }
   let tx = t_update_tx(old_datum, [arbitrary_output])
   t_spend(old_datum, Update, tx)
 }
@@ -466,30 +450,35 @@ fn t_retire_tx(old_datum: ConfigDatum, mint: assets.Value) {
     ..placeholder,
     inputs: [t_own_input(old_datum)],
     outputs: [],
-    mint: mint,
+    mint,
     extra_signatories: [t_dev_pkh],
   }
 }
 
 test retire_happy_path() {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1))
+  let tx = t_retire_tx(
+    old_datum,
+    assets.from_asset(t_own_hash, t_asset_name, -1),
+  )
   t_spend(old_datum, Retire, tx)
 }
 
 test retire_rejects_unauthorized() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx =
-    Transaction {
-      ..t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1)),
-      extra_signatories: [],
-    }
+  let tx = Transaction {
+    ..t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1)),
+    extra_signatories: [],
+  }
   t_spend(old_datum, Retire, tx)
 }
 
 test retire_rejects_wrong_burn_quantity() fail {
   let old_datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -2))
+  let tx = t_retire_tx(
+    old_datum,
+    assets.from_asset(t_own_hash, t_asset_name, -2),
+  )
   t_spend(old_datum, Retire, tx)
 }
 
@@ -521,59 +510,52 @@ fn t_one_time_input() -> Input {
 
 test mint_bootstrap_happy_path() {
   let datum = t_datum(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx =
-    Transaction {
-      ..placeholder,
-      inputs: [t_one_time_input()],
-      outputs: [t_config_output(datum)],
-      mint: assets.from_asset(t_own_hash, t_asset_name, 1),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    inputs: [t_one_time_input()],
+    outputs: [t_config_output(datum)],
+    mint: assets.from_asset(t_own_hash, t_asset_name, 1),
+  }
   config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
 }
 
 test mint_bootstrap_rejects_bad_datum() fail {
-  let bad_datum_output =
-    Output {
-      ..t_config_output(t_datum(None)),
-      datum: InlineDatum(42),
-    }
-  let tx =
-    Transaction {
-      ..placeholder,
-      inputs: [t_one_time_input()],
-      outputs: [bad_datum_output],
-      mint: assets.from_asset(t_own_hash, t_asset_name, 1),
-    }
+  let bad_datum_output = Output {
+    ..t_config_output(t_datum(None)),
+    datum: InlineDatum(42),
+  }
+  let tx = Transaction {
+    ..placeholder,
+    inputs: [t_one_time_input()],
+    outputs: [bad_datum_output],
+    mint: assets.from_asset(t_own_hash, t_asset_name, 1),
+  }
   config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
 }
 
 test mint_burn_accepts_minus_one() {
-  let tx =
-    Transaction {
-      ..placeholder,
-      inputs: [t_own_input(t_datum(Some(CardanoSignature { hash: t_dev_pkh })))],
-      mint: assets.from_asset(t_own_hash, t_asset_name, -1),
-      extra_signatories: [t_dev_pkh],
-    }
+  let tx = Transaction {
+    ..placeholder,
+    inputs: [t_own_input(t_datum(Some(CardanoSignature { hash: t_dev_pkh })))],
+    mint: assets.from_asset(t_own_hash, t_asset_name, -1),
+    extra_signatories: [t_dev_pkh],
+  }
   config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
 }
 
 test mint_burn_rejects_wrong_asset_name() fail {
-  let tx =
-    Transaction {
-      ..placeholder,
-      mint: assets.from_asset(t_own_hash, "other", -1),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    mint: assets.from_asset(t_own_hash, "other", -1),
+  }
   config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
 }
 
 test mint_burn_rejects_mixed_mint_and_burn() fail {
-  let tx =
-    Transaction {
-      ..placeholder,
-      mint: assets.from_asset(t_own_hash, t_asset_name, -1)
-        |> assets.add(t_own_hash, "other", 1),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    mint: assets.from_asset(t_own_hash, t_asset_name, -1)
+      |> assets.add(t_own_hash, "other", 1),
+  }
   config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
 }
-

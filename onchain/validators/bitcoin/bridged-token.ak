@@ -25,21 +25,18 @@ validator bridged_token(
   configNFTAssetName: ByteArray,
 ) {
   mint(redeemer: MintRedeemer, policy_id: PolicyId, self: Transaction) {
-    let config_fields =
-      utils.get_config_as_data_list(
-        utils.safe_list_at(
-          self.reference_inputs,
-          redeemer.config_ref_input_index,
-        ),
-        configNFTPolicyId,
-        configNFTAssetName,
-      )
+    let config_fields = utils.get_config_as_data_list(
+      utils.safe_list_at(self.reference_inputs, redeemer.config_ref_input_index),
+      configNFTPolicyId,
+      configNFTAssetName,
+    )
     //Anchor: the peg validators constrain the mint of config[0]; it must be us.
     expect config.get_bridged_token_policy_id(config_fields) == policy_id
     let asset_name = config.get_bridged_token_asset_name(config_fields)
     //Exactly one asset name under our policy, and it is the canonical one.
-    expect [Pair(minted_name, minted_qty)] =
-      dict.to_pairs(tokens(self.mint, policy_id))
+    expect [Pair(minted_name, minted_qty)] = dict.to_pairs(
+      tokens(self.mint, policy_id),
+    )
     expect minted_name == asset_name
     if minted_qty > 0 {
       pairs.has_key(
@@ -114,6 +111,7 @@ fn t_config_datum() -> ConfigDatum {
     spos_registry_policy_id: #"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     treasury_info_policy_id: #"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     treasury_info_asset_name: "TMTx",
+    initial_btc_treasury_value_sat: 5_000_000,
   }
 }
 
@@ -147,89 +145,81 @@ fn t_mint(policy_id: ByteArray, tx: Transaction) {
 }
 
 test mint_accepts_with_peg_in_withdrawal() {
-  let tx =
-    Transaction {
-      ..placeholder,
-      reference_inputs: [t_config_ref_input()],
-      withdrawals: [Pair(Script(t_peg_in_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    reference_inputs: [t_config_ref_input()],
+    withdrawals: [Pair(Script(t_peg_in_hash), 0)],
+    mint: assets.from_asset(t_own_policy, "fSAT", 100),
+  }
   t_mint(t_own_policy, tx)
 }
 
 test burn_accepts_with_peg_out_withdrawal() {
-  let tx =
-    Transaction {
-      ..placeholder,
-      reference_inputs: [t_config_ref_input()],
-      withdrawals: [Pair(Script(t_peg_out_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", -100),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    reference_inputs: [t_config_ref_input()],
+    withdrawals: [Pair(Script(t_peg_out_hash), 0)],
+    mint: assets.from_asset(t_own_policy, "fSAT", -100),
+  }
   t_mint(t_own_policy, tx)
 }
 
 test mint_rejects_wrong_sign_dispatch() fail {
   //mint (qty>0) but only a peg-out withdrawal present
-  let tx =
-    Transaction {
-      ..placeholder,
-      reference_inputs: [t_config_ref_input()],
-      withdrawals: [Pair(Script(t_peg_out_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    reference_inputs: [t_config_ref_input()],
+    withdrawals: [Pair(Script(t_peg_out_hash), 0)],
+    mint: assets.from_asset(t_own_policy, "fSAT", 100),
+  }
   expect t_mint(t_own_policy, tx)
 }
 
 test mint_rejects_missing_withdrawal() fail {
-  let tx =
-    Transaction {
-      ..placeholder,
-      reference_inputs: [t_config_ref_input()],
-      withdrawals: [],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    reference_inputs: [t_config_ref_input()],
+    withdrawals: [],
+    mint: assets.from_asset(t_own_policy, "fSAT", 100),
+  }
   expect t_mint(t_own_policy, tx)
 }
 
 test mint_rejects_config_policy_id_mismatch() fail {
   let other = #"bb111111111111111111111111111111111111111111111111111111"
-  let tx =
-    Transaction {
-      ..placeholder,
-      reference_inputs: [t_config_ref_input()],
-      withdrawals: [Pair(Script(t_peg_in_hash), 0)],
-      mint: assets.from_asset(other, "fSAT", 100),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    reference_inputs: [t_config_ref_input()],
+    withdrawals: [Pair(Script(t_peg_in_hash), 0)],
+    mint: assets.from_asset(other, "fSAT", 100),
+  }
   expect t_mint(other, tx)
 }
 
 test mint_rejects_second_asset_name() fail {
-  let tx =
-    Transaction {
-      ..placeholder,
-      reference_inputs: [t_config_ref_input()],
-      withdrawals: [Pair(Script(t_peg_in_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100)
-        |> assets.add(t_own_policy, "junk", 1),
-    }
+  let tx = Transaction {
+    ..placeholder,
+    reference_inputs: [t_config_ref_input()],
+    withdrawals: [Pair(Script(t_peg_in_hash), 0)],
+    mint: assets.from_asset(t_own_policy, "fSAT", 100)
+      |> assets.add(t_own_policy, "junk", 1),
+  }
   expect t_mint(t_own_policy, tx)
 }
 
 test mint_rejects_ref_input_without_config_nft() fail {
-  let no_nft =
-    Input {
-      ..t_config_ref_input(),
-      output: Output {
-        ..t_config_ref_input().output,
-        value: assets.from_lovelace(2_000_000),
-      },
-    }
-  let tx =
-    Transaction {
-      ..placeholder,
-      reference_inputs: [no_nft],
-      withdrawals: [Pair(Script(t_peg_in_hash), 0)],
-      mint: assets.from_asset(t_own_policy, "fSAT", 100),
-    }
+  let no_nft = Input {
+    ..t_config_ref_input(),
+    output: Output {
+      ..t_config_ref_input().output,
+      value: assets.from_lovelace(2_000_000),
+    },
+  }
+  let tx = Transaction {
+    ..placeholder,
+    reference_inputs: [no_nft],
+    withdrawals: [Pair(Script(t_peg_in_hash), 0)],
+    mint: assets.from_asset(t_own_policy, "fSAT", 100),
+  }
   expect t_mint(t_own_policy, tx)
 }

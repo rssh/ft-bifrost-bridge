@@ -60,6 +60,18 @@ fn read_bridge_state(
       constants.bridge_state_asset_name,
     ) == 1
   expect InlineDatum(state_raw) = bridge_state_ref_input.output.datum
+  //spec [LIB-1]: a TYPED decode, not a positional read. It checks the
+  //constructor tag AND the exact arity, so `state.cpo_root` can never be
+  //silently taken for its neighbour — the misread whose consequence is a
+  //SUCCEEDING `mpf.miss`, i.e. cancelling a paid PegOutRequest.
+  //
+  //The exact arity is deliberate and it FREEZES the datum at four fields:
+  //a fifth would trap this validator from the first Confirm that writes it,
+  //and this script cannot be replaced without abandoning its state. That is
+  //the documented trade ([LIB-3]) — `BridgeState` is not governance data, so
+  //widening it is a protocol revision, not an append. Do NOT "relax" this to
+  //positional getters to make room for a field: config.ak reads positionally
+  //because its datum is MEANT to grow; this one is not.
   expect state: BridgeState = state_raw
   state
 }

@@ -237,7 +237,38 @@ field order is consensus-visible. No validator uses them.
   access its fields BY NAME.
 - [LIB-2] No reader MAY use `utils.get_mpf_from_output` on the singleton. That
   helper stays for the CPI trie's one-field datum.
-- [LIB-3] A new field MUST be appended, never inserted.
+- [LIB-3] A new field MUST be appended, never inserted. **Appending is a
+  REDEPLOYMENT of every on-chain reader**, not a compatible change: see the
+  note below.
+
+> **Why `BridgeState` cannot grow in place, unlike the Config datum.** The
+> Aiken readers decode the singleton with `expect state: BridgeState`, which
+> checks the constructor tag AND the exact arity. That is deliberate — it is
+> what [LIB-1] asks for, and the typed decode is what makes `state.cpo_root`
+> impossible to confuse with its neighbour. The cost is that a fifth field
+> makes `peg-in.ak` and `peg-out.ak` trap from the first Confirm that writes
+> it, and those validators cannot be replaced without abandoning their state.
+>
+> So the two datums evolve differently, and the difference is a deliberate
+> trade rather than an inconsistency:
+>
+> * **`ConfigDatum` is append-compatible.** Its readers use positional
+>   `safe_list_at` getters precisely so governance can append discovery fields
+>   without redeploying anything. It is data the bridge is expected to grow.
+> * **`BridgeState` is FIXED at four fields.** It is not governance data: it is
+>   the state one validator writes and three read, every field is load-bearing,
+>   and there is no anticipated fifth. Pinning it buys the strongest possible
+>   read for the datum whose misreading causes the rollback this revision
+>   exists to prevent.
+>
+> Adding a field to `BridgeState` therefore means a new `peg-in.ak`, a new
+> `peg-out.ak`, a Config Update pointing at both, and §Recovery: replacing the
+> singleton for the datum itself. Treat it as a protocol revision, and prefer a
+> new singleton over a wider one.
+>
+> OFF-CHAIN readers are not bound by this. They read positionally with a
+> minimum field count, so a longer datum decodes unchanged there — the strict
+> arity is an on-chain property, not a wire rule.
 
 > **Why named access, and not an index parameter.** An earlier draft kept
 > `utils.get_mpf_from_output` and gave it an index argument. That is one

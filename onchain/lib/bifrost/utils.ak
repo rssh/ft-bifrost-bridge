@@ -3,10 +3,11 @@ use aiken/collection/dict
 use aiken/collection/list
 use aiken/crypto
 use aiken/merkle_patricia_forestry as mpf
+use bifrost/constants
 use bifrost/types/completed_peg_ins.{CompletedPegInsTrieDatum}
-use cardano/address.{Script}
+use cardano/address.{Address, Script}
 use cardano/assets.{AssetName, PolicyId, Value, quantity_of, tokens}
-use cardano/transaction.{InlineDatum, Input, Output, OutputReference}
+use cardano/transaction.{InlineDatum, Input, NoDatum, Output, OutputReference}
 
 pub fn hash_output_ref(outputRef: OutputReference) -> ByteArray {
   outputRef |> builtin.serialise_data |> crypto.sha2_256
@@ -105,4 +106,154 @@ pub fn get_mpf_from_output(output: Output) -> mpf.MerklePatriciaForestry {
 
 pub fn bitcoin_hash(bytes: ByteArray) -> ByteArray {
   crypto.sha2_256(crypto.sha2_256(bytes))
+}
+
+/// The check that a UTxO presented as the Treasury state UTxO really is it.
+///
+/// spec [REG-6], [REG-7], [REG-8]. Before this existed `spos-registry.ak`
+/// located the Treasury state UTxO by redeemer index alone, so a registrant
+/// could point the index at a wallet UTxO carrying a `TreasuryDatum`-shaped
+/// datum, satisfy the [REG-5] absence proof against a trie it chose, and
+/// register a duplicate `bifrost_id_pk` while the real identity root stood
+/// still.
+///
+/// The address equality is not redundant with the NFT checks. The NFT proves
+/// which token is present; the address is what keeps the continuing UTxO under
+/// `treasury.ak`'s control.
+pub fn treasury_state_pinned(
+  treasury_input: Input,
+  treasury_output: Output,
+  treasury_policy_id: PolicyId,
+) -> Bool {
+  and {
+    quantity_of(
+      treasury_input.output.value,
+      treasury_policy_id,
+      constants.treasury_info_nft_asset_name,
+    ) == 1,
+    quantity_of(
+      treasury_output.value,
+      treasury_policy_id,
+      constants.treasury_info_nft_asset_name,
+    ) == 1,
+    treasury_output.address == treasury_input.output.address,
+  }
+}
+
+//----------------------------------------------------------------------------
+// Tests
+//----------------------------------------------------------------------------
+
+const t_treasury_policy: ByteArray =
+  #"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+const t_other_policy: ByteArray =
+  #"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+fn t_treasury_address() -> Address {
+  Address {
+    payment_credential: Script(t_treasury_policy),
+    stake_credential: None,
+  }
+}
+
+fn t_pin_value(policy: ByteArray, name: ByteArray, qty: Int) -> Value {
+  assets.from_lovelace(2_000_000) |> assets.add(policy, name, qty)
+}
+
+fn t_pin_output(value: Value, address: Address) -> Output {
+  Output {
+    address: address,
+    value: value,
+    datum: NoDatum,
+    reference_script: None,
+  }
+}
+
+fn t_pin_input(value: Value, address: Address) -> Input {
+  Input {
+    output_reference: OutputReference {
+      transaction_id: #"1111111111111111111111111111111111111111111111111111111111111111",
+      output_index: 0,
+    },
+    output: t_pin_output(value, address),
+  }
+}
+
+fn t_good_value() -> Value {
+  t_pin_value(t_treasury_policy, constants.treasury_info_nft_asset_name, 1)
+}
+
+// spec [REG-6], [REG-7], [REG-8]: a real Treasury state UTxO passes.
+test treasury_state_pinned_happy() {
+  treasury_state_pinned(
+    t_pin_input(t_good_value(), t_treasury_address()),
+    t_pin_output(t_good_value(), t_treasury_address()),
+    t_treasury_policy,
+  )
+}
+
+// spec [REG-6]: an input with no Treasury state NFT is rejected. This is the
+// decoy the registry accepted before the pin existed.
+test treasury_state_pinned_rejects_input_without_nft() {
+  !treasury_state_pinned(
+    t_pin_input(assets.from_lovelace(2_000_000), t_treasury_address()),
+    t_pin_output(t_good_value(), t_treasury_address()),
+    t_treasury_policy,
+  )
+}
+
+// spec [REG-6]: the right name under a foreign policy is not the NFT.
+test treasury_state_pinned_rejects_foreign_policy() {
+  let forged =
+    t_pin_value(t_other_policy, constants.treasury_info_nft_asset_name, 1)
+  !treasury_state_pinned(
+    t_pin_input(forged, t_treasury_address()),
+    t_pin_output(t_good_value(), t_treasury_address()),
+    t_treasury_policy,
+  )
+}
+
+// spec [REG-6]: the right policy under a wrong name is not the NFT.
+test treasury_state_pinned_rejects_wrong_name() {
+  let forged = t_pin_value(t_treasury_policy, "NOTBFR", 1)
+  !treasury_state_pinned(
+    t_pin_input(forged, t_treasury_address()),
+    t_pin_output(t_good_value(), t_treasury_address()),
+    t_treasury_policy,
+  )
+}
+
+// spec [REG-7]: the NFT must continue into the output.
+test treasury_state_pinned_rejects_output_without_nft() {
+  !treasury_state_pinned(
+    t_pin_input(t_good_value(), t_treasury_address()),
+    t_pin_output(assets.from_lovelace(2_000_000), t_treasury_address()),
+    t_treasury_policy,
+  )
+}
+
+// spec [REG-8]: the output must stay at the same address.
+test treasury_state_pinned_rejects_moved_output() {
+  let elsewhere =
+    Address {
+      payment_credential: Script(t_other_policy),
+      stake_credential: None,
+    }
+  !treasury_state_pinned(
+    t_pin_input(t_good_value(), t_treasury_address()),
+    t_pin_output(t_good_value(), elsewhere),
+    t_treasury_policy,
+  )
+}
+
+// spec [REG-6]: two copies is not one.
+test treasury_state_pinned_rejects_quantity_two() {
+  let doubled =
+    t_pin_value(t_treasury_policy, constants.treasury_info_nft_asset_name, 2)
+  !treasury_state_pinned(
+    t_pin_input(doubled, t_treasury_address()),
+    t_pin_output(doubled, t_treasury_address()),
+    t_treasury_policy,
+  )
 }

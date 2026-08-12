@@ -19,7 +19,7 @@ use bifrost/types/peg_in.{
 }
 use bifrost/utils
 use cardano/address.{Address, Credential, Script, VerificationKey}
-use cardano/assets.{AssetName, PolicyId, quantity_of, tokens, without_lovelace}
+use cardano/assets.{PolicyId, quantity_of, tokens, without_lovelace}
 use cardano/script_context.{ScriptContext}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction, ValidityRange,
@@ -95,7 +95,6 @@ fn read_bridge_state(
 validator peg_in_validator(
   oracle_policy_id: PolicyId,
   config_nft_policy_id: PolicyId,
-  config_nft_asset_name: AssetName,
 ) {
   mint(redeemer: PegInMintRedeemer, policy_id: PolicyId, self: Transaction) {
     let input_ref_hash = utils.hash_output_ref(redeemer.input_ref)
@@ -220,7 +219,7 @@ validator peg_in_validator(
     let config_fields = utils.get_config_as_data_list(
       utils.safe_list_at(self.reference_inputs, redeemer.config_ref_input_index),
       config_nft_policy_id,
-      config_nft_asset_name,
+      constants.config_nft_asset_name,
     )
     let bridged_token_policy_id =
       config.get_bridged_token_policy(config_fields)
@@ -532,7 +531,9 @@ validator peg_in_validator(
 const t_config_policy: ByteArray =
   #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
-const t_config_asset: ByteArray = "BifrostConfig"
+//Alias for the [CFG-7] constant; the ref-input fixture must carry the real
+//Config NFT name or get_config_as_data_list rejects it.
+const t_config_asset: ByteArray = constants.config_nft_asset_name
 
 const t_oracle_policy: ByteArray =
   #"ee111111111111111111111111111111111111111111111111111111"
@@ -607,25 +608,35 @@ fn t_recipient() -> Address {
   }
 }
 
-//The rev-5.4 fifteen-field Config datum (spec §Config datum), raw on
+//The rev-5.5 twelve-field Config datum (spec §Config datum), raw on
 //purpose:
 //readers use positional getters, so the fixture mirrors the wire encoding.
 fn t_config_datum_data() -> Data {
   let update_auth_data: Data = Some(CardanoSignature { hash: #"aadd" })
+  //params (ConfigDatum field 1): schedule, fee_rate_sat_per_vb, per_pegout_fee,
+  //min_peg_out_fbtc, base_ban_duration_ms, max_faults_before_permanent,
+  //max_validity_window_ms, federation_csv_blocks. The schedule slot is a dummy
+  //Int: no validator reads it, and a full ScheduleParams here would freeze its
+  //shape into this fixture for no gain.
   let params_data: Data =
     builtin.constr_data(
       0,
       [
+        builtin.i_data(0),
         builtin.i_data(1),
         builtin.i_data(1000),
         builtin.i_data(10000),
-        builtin.i_data(0),
+        builtin.i_data(600_000),
+        builtin.i_data(3),
+        builtin.i_data(3_600_000),
+        builtin.i_data(144),
       ],
     )
   builtin.constr_data(
     0,
     [
       update_auth_data,
+      params_data,
       builtin.b_data(t_bridged_token_policy),
       builtin.b_data(t_cpi_policy),
       builtin.b_data(t_bridge_state_policy),
@@ -633,16 +644,12 @@ fn t_config_datum_data() -> Data {
       builtin.b_data(#"aa333333333333333333333333333333333333333333333333333333"),
       builtin.b_data(t_peg_in_script_hash),
       builtin.b_data(#"aa555555555555555555555555555555555555555555555555555555"),
-      //Federation identity, indexes 7-13 (spec §Config datum). Off-chain
-      //readers only; no validator in this tree reads a current value.
+      //Federation identity, indexes 8-11 (spec §Config datum).
       builtin.b_data(#"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-      builtin.i_data(600_000),
-      builtin.i_data(3),
-      builtin.i_data(3_600_000),
       builtin.b_data(#"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
       builtin.b_data(#"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
-      builtin.b_data("TMTx"),
-      params_data,
+      //y_federation, spec [UY-5]: read on-chain by treasury.ak only
+      builtin.b_data(#"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
     ],
   )
 }
@@ -840,7 +847,6 @@ fn t_complete_with(
   peg_in_validator.withdraw(
     t_oracle_policy,
     t_config_policy,
-    t_config_asset,
     PegInWithdrawRedeemer {
       config_ref_input_index: 0,
       action_type: CompletePegIn {
@@ -1022,7 +1028,6 @@ fn t_close_with(
   peg_in_validator.withdraw(
     t_oracle_policy,
     t_config_policy,
-    t_config_asset,
     PegInWithdrawRedeemer {
       config_ref_input_index: 0,
       action_type: Close { burnt_peg_in_nft_asset_name: t_pir_nft_asset, proof },
@@ -1301,7 +1306,6 @@ fn t_mint_with_created(created: Int) -> Bool {
   peg_in_validator.mint(
     t_oracle_policy,
     t_config_policy,
-    t_config_asset,
     PegInMintRedeemer { input_ref, new_peg_in_request: peg_in_request },
     t_peg_in_script_hash,
     tx,

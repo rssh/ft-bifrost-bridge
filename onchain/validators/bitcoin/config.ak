@@ -1,6 +1,7 @@
 use aiken/builtin
 use aiken/collection/list
 use bifrost/authorizer
+use bifrost/constants
 use bifrost/types/config.{
   ConfigDatum, ConfigSpendRedeemer, Retire, ScheduleParams, Update,
 } as configType
@@ -17,7 +18,11 @@ use cardano/transaction.{
 }
 
 //Contains all SC params
-validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
+//spec [CFG-7]: the asset name is the protocol constant "BIFCFG", not a
+//parameter. Five validators took it as one; a single divergent deployment
+//argument then left treasury.ak searching for a token that does not exist, and
+//its Retire branch with it, so the Treasury state UTxO could never be spent.
+validator config(tx0: ByteArray, index0: Int) {
   mint(_redeemer: Redeemer, policy_id: PolicyId, self: Transaction) {
     let own_policy_mint = quantity_of_policy_id(self.mint, policy_id)
     if own_policy_mint > 0 {
@@ -39,9 +44,9 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
         //Only 1 token of same policy
         own_policy_mint == 1,
         //I am minting only 1 token (NFT)
-        quantity_of(self.mint, policy_id, config_asset_name) == 1,
+        quantity_of(self.mint, policy_id, constants.config_nft_asset_name) == 1,
         //NFT goes to the output
-        quantity_of(output_parameters.value, policy_id, config_asset_name) == 1,
+        quantity_of(output_parameters.value, policy_id, constants.config_nft_asset_name) == 1,
       }
     } else {
       //Retire: burn exactly the config NFT. No authorization here: the NFT
@@ -50,7 +55,7 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
       //authorization.
       and {
         own_policy_mint == -1,
-        quantity_of(self.mint, policy_id, config_asset_name) == -1,
+        quantity_of(self.mint, policy_id, constants.config_nft_asset_name) == -1,
       }
     }
   }
@@ -112,17 +117,32 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
             own_input.output.value,
           ),
           //The config NFT continues, and is the only own-policy token
-          quantity_of(config_output.value, own_hash, config_asset_name) == 1,
+          quantity_of(config_output.value, own_hash, constants.config_nft_asset_name) == 1,
           quantity_of_policy_id(config_output.value, own_hash) == 1,
         }
       }
       Retire ->
         //The tx burns exactly the config NFT; no continuing output required.
         //The min-ADA goes wherever the authority directs it.
+        //
+        //spec [CFG-8]: it MUST also burn the Treasury state NFT, in this same
+        //transaction. The two retirements are mutually required — treasury.ak's
+        //Retire demands this burn, and this demands that one — because either
+        //alone is a trap. The Config NFT can be burned once; after that
+        //treasury.ak's Retire can never be satisfied again (its check is on a
+        //supply that is now zero) and its other two branches cannot read the
+        //Config they need, so the Treasury state UTxO is unspendable forever
+        //with its min-ADA inside. Requiring both makes that ordering
+        //unreachable rather than merely undocumented.
         and {
           authorized,
           quantity_of_policy_id(self.mint, own_hash) == -1,
-          quantity_of(self.mint, own_hash, config_asset_name) == -1,
+          quantity_of(self.mint, own_hash, constants.config_nft_asset_name) == -1,
+          quantity_of(
+            self.mint,
+            configType.get_treasury_info_policy_id(old_fields),
+            constants.treasury_info_nft_asset_name,
+          ) == -1,
         }
     }
   }
@@ -141,7 +161,8 @@ const t_tx0: ByteArray =
 
 const t_index0: Int = 0
 
-const t_asset_name: ByteArray = "BifrostConfig"
+//Alias for the [CFG-7] constant, kept so the fixtures below read as they did.
+const t_asset_name: ByteArray = constants.config_nft_asset_name
 
 const t_own_hash: ByteArray =
   #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -155,14 +176,14 @@ const t_own_ref: OutputReference =
     output_index: 0,
   }
 
-//The rev-5.4 fifteen-field Config datum (spec §Config datum), built as raw
-//Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
-//3 bridge_state_policy, 4 tm_script_hash [CFG-2], 5 peg_in_script_hash,
-//6 peg_out_script_hash, 7 spo_bans_policy_id, 8 base_ban_duration_ms,
-//9 max_faults_before_permanent, 10 max_validity_window_ms,
-//11 spos_registry_policy_id, 12 treasury_info_policy_id,
-//13 treasury_info_asset_name,
-//14 params (fee_rate_sat_per_vb, per_pegout_fee, min_peg_out_fbtc, schedule).
+//The rev-5.5 twelve-field Config datum (spec §Config datum), built as raw
+//Data: 0 update_auth, 1 params, 2 bridged_token_policy,
+//3 completed_peg_ins_policy, 4 bridge_state_policy, 5 tm_script_hash [CFG-2],
+//6 peg_in_script_hash, 7 peg_out_script_hash, 8 spo_bans_policy_id,
+//9 spos_registry_policy_id, 10 treasury_info_policy_id, 11 y_federation.
+//params holds (schedule, fee_rate_sat_per_vb, per_pegout_fee,
+//min_peg_out_fbtc, base_ban_duration_ms, max_faults_before_permanent,
+//max_validity_window_ms, federation_csv_blocks).
 //Raw on purpose: the spend handler itself takes the datum raw, so the
 //fixture mirrors the wire encoding, and it stays valid across a future datum
 //shape evolution.
@@ -185,16 +206,21 @@ fn t_datum_data(update_auth: Option<AuthorizationMethod>) -> Data {
     builtin.constr_data(
       0,
       [
+        schedule_data,
         builtin.i_data(1),
         builtin.i_data(1000),
         builtin.i_data(10000),
-        schedule_data,
+        builtin.i_data(600_000),
+        builtin.i_data(3),
+        builtin.i_data(3_600_000),
+        builtin.i_data(144),
       ],
     )
   builtin.constr_data(
     0,
     [
       update_auth_data,
+      params_data,
       builtin.b_data(#"aa111111111111111111111111111111111111111111111111111111"),
       builtin.b_data(#"aa444444444444444444444444444444444444444444444444444444"),
       builtin.b_data(#"aa555555555555555555555555555555555555555555555555555555"),
@@ -202,16 +228,12 @@ fn t_datum_data(update_auth: Option<AuthorizationMethod>) -> Data {
       builtin.b_data(#"aa888888888888888888888888888888888888888888888888888888"),
       builtin.b_data(#"aa666666666666666666666666666666666666666666666666666666"),
       builtin.b_data(#"aa777777777777777777777777777777777777777777777777777777"),
-      //Federation identity, indexes 7-13 (spec §Config datum). Off-chain
-      //readers only; no validator in this tree reads a current value.
+      //Federation identity, indexes 8-11 (spec §Config datum).
       builtin.b_data(#"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-      builtin.i_data(600_000),
-      builtin.i_data(3),
-      builtin.i_data(3_600_000),
       builtin.b_data(#"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
       builtin.b_data(#"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
-      builtin.b_data("TMTx"),
-      params_data,
+      //y_federation, spec [UY-5]: read on-chain by treasury.ak
+      builtin.b_data(#"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
     ],
   )
 }
@@ -234,7 +256,7 @@ fn t_set_field(datum_data: Data, index: Int, value: Data) -> Data {
 }
 
 //The generic "some field changed" edit the Update tests apply: rewrite
-//field 5 (peg_in_script_hash) to a value the old datum did not carry. Which
+//field 5 (tm_script_hash) to a value the old datum did not carry. Which
 //field changes is irrelevant to these tests - the Update handler accepts any
 //datum content and they exercise the address, value and authorization rules.
 const t_edited_peg_in_hash: ByteArray =
@@ -269,7 +291,6 @@ fn t_spend(
   config.spend(
     t_tx0,
     t_index0,
-    t_asset_name,
     Some(old_datum_data),
     redeemer,
     t_own_ref,
@@ -389,7 +410,7 @@ test update_allows_changing_bridged_token_identity() {
   let new_datum =
     t_set_field(
       old_datum,
-      1,
+      2,
       builtin.b_data(#"ff222222222222222222222222222222222222222222222222222222"),
     )
   let tx = t_update_tx(old_datum, [t_config_output(new_datum)])
@@ -495,6 +516,15 @@ test update_allows_arbitrary_datum_shape() {
   t_spend(old_datum, Update, tx)
 }
 
+//spec [CFG-8]: the Treasury state NFT policy the fixture publishes at Config
+//#10, and the burn of it that every Retire must now carry.
+const t_treasury_policy: ByteArray =
+  #"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+fn t_treasury_burn() -> assets.Value {
+  assets.from_asset(t_treasury_policy, constants.treasury_info_nft_asset_name, -1)
+}
+
 fn t_retire_tx(old_datum: Data, mint: assets.Value) {
   Transaction {
     ..placeholder,
@@ -507,7 +537,12 @@ fn t_retire_tx(old_datum: Data, mint: assets.Value) {
 
 test retire_happy_path() {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1))
+  let tx =
+    t_retire_tx(
+      old_datum,
+      assets.from_asset(t_own_hash, t_asset_name, -1)
+        |> assets.merge(t_treasury_burn()),
+    )
   t_spend(old_datum, Retire, tx)
 }
 
@@ -515,7 +550,11 @@ test retire_rejects_unauthorized() fail {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
   let tx =
     Transaction {
-      ..t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1)),
+      ..t_retire_tx(
+        old_datum,
+        assets.from_asset(t_own_hash, t_asset_name, -1)
+          |> assets.merge(t_treasury_burn()),
+      ),
       extra_signatories: [],
     }
   t_spend(old_datum, Retire, tx)
@@ -523,13 +562,33 @@ test retire_rejects_unauthorized() fail {
 
 test retire_rejects_wrong_burn_quantity() fail {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -2))
+  let tx =
+    t_retire_tx(
+      old_datum,
+      assets.from_asset(t_own_hash, t_asset_name, -2)
+        |> assets.merge(t_treasury_burn()),
+    )
   t_spend(old_datum, Retire, tx)
 }
 
 test retire_rejects_wrong_asset_name_burn() fail {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, "other", -1))
+  let tx =
+    t_retire_tx(
+      old_datum,
+      assets.from_asset(t_own_hash, "other", -1)
+        |> assets.merge(t_treasury_burn()),
+    )
+  t_spend(old_datum, Retire, tx)
+}
+
+//spec [CFG-8]: retiring the Config WITHOUT burning the Treasury state NFT is
+//refused. Allowing it strands the Treasury state UTxO forever: treasury.ak's
+//Retire needs a Config-NFT burn that can never happen again, and its other two
+//branches need a Config UTxO that no longer exists.
+test retire_rejects_without_treasury_burn() fail {
+  let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
+  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1))
   t_spend(old_datum, Retire, tx)
 }
 
@@ -562,7 +621,7 @@ test mint_bootstrap_happy_path() {
       outputs: [t_config_output(datum)],
       mint: assets.from_asset(t_own_hash, t_asset_name, 1),
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 
 test mint_bootstrap_rejects_bad_datum() fail {
@@ -578,7 +637,7 @@ test mint_bootstrap_rejects_bad_datum() fail {
       outputs: [bad_datum_output],
       mint: assets.from_asset(t_own_hash, t_asset_name, 1),
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 
 test mint_burn_accepts_minus_one() {
@@ -589,7 +648,7 @@ test mint_burn_accepts_minus_one() {
       mint: assets.from_asset(t_own_hash, t_asset_name, -1),
       extra_signatories: [t_dev_pkh],
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 
 test mint_burn_rejects_wrong_asset_name() fail {
@@ -598,7 +657,7 @@ test mint_burn_rejects_wrong_asset_name() fail {
       ..placeholder,
       mint: assets.from_asset(t_own_hash, "other", -1),
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 
 test mint_burn_rejects_mixed_mint_and_burn() fail {
@@ -608,6 +667,6 @@ test mint_burn_rejects_mixed_mint_and_burn() fail {
       mint: assets.from_asset(t_own_hash, t_asset_name, -1)
         |> assets.add(t_own_hash, "other", 1),
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 

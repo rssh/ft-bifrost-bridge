@@ -6,16 +6,18 @@ use bifrost/types/spos_registry.{
   ListRootData, RegistrationListDatum, RegistrationNodeData,
   SposRegistryMintRedeemer, SposRegistrySpendRedeemer,
 }
+use bifrost/constants
 use bifrost/types/treasury.{TreasuryDatum}
 use bifrost/utils
-use cardano/address.{Script}
+use cardano/address.{Address, Script}
 use cardano/assets.{PolicyId, Value, quantity_of}
 use cardano/script_context.{ScriptContext}
 use cardano/transaction.{
-  InlineDatum, Output, OutputReference, Transaction, find_input,
+  InlineDatum, Input, Output, OutputReference, Transaction, find_input,
+  placeholder,
 }
 
-const registration_root_key = "reg-root"
+const registration_root_key = constants.registration_root_asset_name
 
 const registration_node_key_prefix = ""
 
@@ -107,21 +109,36 @@ fn updated_treasury_datum(
   }
 }
 
+// spec [REG-6], [REG-7], [REG-8]: the treasury input and output are located by
+// redeemer index, so they MUST be authenticated before their datums are
+// trusted. Without the pin the indexes may name ANY UTxO carrying a datum of
+// the right shape, and the [REG-5] absence proof then runs against a trie the
+// registrant chose: the registry list gains a real membership token while the
+// real identity root never moves, defeating the global uniqueness of
+// bifrost_id_pk that [REG-5] and [DRG-4] exist to enforce.
 fn treasury_state_transition_ok(
   self: Transaction,
   treasury_input_index: Int,
   treasury_output_index: Int,
   new_bifrost_identity_root: ByteArray,
+  treasury_policy_id: PolicyId,
 ) -> Bool {
   let treasury_input = utils.safe_list_at(self.inputs, treasury_input_index)
   let treasury_output = utils.safe_list_at(self.outputs, treasury_output_index)
   let treasury_input_datum = get_treasury_datum(treasury_input.output)
   let treasury_output_datum = get_treasury_datum(treasury_output)
 
-  treasury_output_datum == updated_treasury_datum(
-    treasury_input_datum,
-    new_bifrost_identity_root,
-  )
+  and {
+    utils.treasury_state_pinned(
+      treasury_input,
+      treasury_output,
+      treasury_policy_id,
+    ),
+    treasury_output_datum == updated_treasury_datum(
+      treasury_input_datum,
+      new_bifrost_identity_root,
+    ),
+  }
 }
 
 fn validate_bootstrap(
@@ -147,6 +164,7 @@ fn validate_registration(
   redeemer: SposRegistryMintRedeemer,
   policy_id: PolicyId,
   self: Transaction,
+  treasury_policy_id: PolicyId,
 ) -> Bool {
   expect SposRegistryMintRedeemer.Register {
     cold_vkey,
@@ -244,6 +262,7 @@ fn validate_registration(
       treasury_input_index,
       treasury_output_index,
       updated_bifrost_identity_root,
+      treasury_policy_id,
     ),
   }
 }
@@ -252,6 +271,7 @@ fn validate_deregistration(
   redeemer: SposRegistryMintRedeemer,
   policy_id: PolicyId,
   self: Transaction,
+  treasury_policy_id: PolicyId,
 ) -> Bool {
   expect SposRegistryMintRedeemer.Deregister {
     cold_vkey,
@@ -326,16 +346,27 @@ fn validate_deregistration(
 
   and {
     deregistration_linked_list_ok,
+    // spec [DRG-5]: [REG-6] to [REG-8] apply unchanged to Deregister.
     treasury_state_transition_ok(
       self,
       treasury_input_index,
       treasury_output_index,
       updated_bifrost_identity_root,
+      treasury_policy_id,
     ),
   }
 }
 
-validator spo_registry(bootstrap_tx_id: ByteArray, bootstrap_output_index: Int) {
+// spec [REG-6]: treasury_policy_id is a COMPILE PARAMETER, and it can be one
+// only because rev 5.5 broke the cycle. treasury_info used to take
+// registry_policy_id, which made the treasury policy a function of this one, so
+// this parameter would have been self-referential. treasury.ak now reads the
+// registry policy from the Config datum instead.
+validator spo_registry(
+  bootstrap_tx_id: ByteArray,
+  bootstrap_output_index: Int,
+  treasury_policy_id: PolicyId,
+) {
   mint(
     redeemer: SposRegistryMintRedeemer,
     policy_id: PolicyId,
@@ -347,9 +378,9 @@ validator spo_registry(bootstrap_tx_id: ByteArray, bootstrap_output_index: Int) 
       SposRegistryMintRedeemer.Bootstrap ->
         validate_bootstrap(self, policy_id, bootstrap_ref)
       SposRegistryMintRedeemer.Register { .. } ->
-        validate_registration(redeemer, policy_id, self)
+        validate_registration(redeemer, policy_id, self, treasury_policy_id)
       SposRegistryMintRedeemer.Deregister { .. } ->
-        validate_deregistration(redeemer, policy_id, self)
+        validate_deregistration(redeemer, policy_id, self, treasury_policy_id)
     }
   }
 
@@ -368,4 +399,145 @@ validator spo_registry(bootstrap_tx_id: ByteArray, bootstrap_output_index: Int) 
   else(_ctx: ScriptContext) {
     False
   }
+}
+
+//----------------------------------------------------------------------------
+// Tests: the Treasury state pin
+//
+// spec [REG-6], [REG-7], [REG-8]. Before the pin existed,
+// treasury_state_transition_ok took the treasury input and output from redeemer
+// indexes and checked nothing but the datum transition. A registrant could
+// point those indexes at a wallet UTxO carrying a TreasuryDatum-shaped datum,
+// satisfy the [REG-5] absence proof against a trie it chose, and register a
+// duplicate bifrost_id_pk while the real identity root stood still.
+//
+// These call treasury_state_transition_ok directly. A full Register fixture
+// would need a linked-list anchor, an Ed25519 vector, a BIP340 vector and an
+// MPF proof, none of which this change touches.
+//----------------------------------------------------------------------------
+
+const t_treasury_policy: ByteArray =
+  #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+const t_root0: ByteArray =
+  #"0000000000000000000000000000000000000000000000000000000000000000"
+
+const t_root1: ByteArray =
+  #"1111111111111111111111111111111111111111111111111111111111111111"
+
+const t_frost_key: ByteArray =
+  #"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+fn t_treasury_address() -> Address {
+  Address {
+    payment_credential: Script(t_treasury_policy),
+    stake_credential: None,
+  }
+}
+
+fn t_treasury_value(with_nft: Bool) -> Value {
+  let base = assets.from_lovelace(2_000_000)
+  if with_nft {
+    base
+      |> assets.add(t_treasury_policy, constants.treasury_info_nft_asset_name, 1)
+  } else {
+    base
+  }
+}
+
+fn t_treasury_output(
+  root: ByteArray,
+  key: ByteArray,
+  with_nft: Bool,
+  address: Address,
+) -> Output {
+  Output {
+    address: address,
+    value: t_treasury_value(with_nft),
+    datum: InlineDatum(
+      TreasuryDatum { bifrost_identity_root: root, current_spos_frost_key: key },
+    ),
+    reference_script: None,
+  }
+}
+
+fn t_treasury_input(root: ByteArray, with_nft: Bool) -> Input {
+  Input {
+    output_reference: OutputReference {
+      transaction_id: #"4444444444444444444444444444444444444444444444444444444444444444",
+      output_index: 0,
+    },
+    output: t_treasury_output(root, t_frost_key, with_nft, t_treasury_address()),
+  }
+}
+
+fn t_transition_tx(
+  treasury_input: Input,
+  treasury_output: Output,
+) -> Transaction {
+  Transaction {
+    ..placeholder,
+    inputs: [treasury_input],
+    outputs: [treasury_output],
+  }
+}
+
+test treasury_transition_happy() {
+  let tx =
+    t_transition_tx(
+      t_treasury_input(t_root0, True),
+      t_treasury_output(t_root1, t_frost_key, True, t_treasury_address()),
+    )
+  treasury_state_transition_ok(tx, 0, 0, t_root1, t_treasury_policy)
+}
+
+// spec [REG-6]: the decoy attack. A datum-shaped wallet UTxO is not the
+// Treasury state UTxO.
+test treasury_transition_rejects_decoy_input() {
+  let tx =
+    t_transition_tx(
+      t_treasury_input(t_root0, False),
+      t_treasury_output(t_root1, t_frost_key, False, t_treasury_address()),
+    )
+  !treasury_state_transition_ok(tx, 0, 0, t_root1, t_treasury_policy)
+}
+
+// spec [REG-7]: the NFT must continue into the output.
+test treasury_transition_rejects_output_without_nft() {
+  let tx =
+    t_transition_tx(
+      t_treasury_input(t_root0, True),
+      t_treasury_output(t_root1, t_frost_key, False, t_treasury_address()),
+    )
+  !treasury_state_transition_ok(tx, 0, 0, t_root1, t_treasury_policy)
+}
+
+// spec [REG-8]: and it must stay at treasury.ak.
+test treasury_transition_rejects_moved_output() {
+  let elsewhere =
+    Address {
+      payment_credential: Script(
+        #"ff111111111111111111111111111111111111111111111111111111",
+      ),
+      stake_credential: None,
+    }
+  let tx =
+    t_transition_tx(
+      t_treasury_input(t_root0, True),
+      t_treasury_output(t_root1, t_frost_key, True, elsewhere),
+    )
+  !treasury_state_transition_ok(tx, 0, 0, t_root1, t_treasury_policy)
+}
+
+// The datum rule the pin does not replace: the registry may move the identity
+// root and nothing else.
+test treasury_transition_rejects_key_change() {
+  let other_key =
+    #"abababababababababababababababababababababababababababababababab"
+  let tx =
+    t_transition_tx(
+      t_treasury_input(t_root0, True),
+      t_treasury_output(t_root1, other_key, True, t_treasury_address()),
+    )
+  !treasury_state_transition_ok(tx, 0, 0, t_root1, t_treasury_policy)
 }

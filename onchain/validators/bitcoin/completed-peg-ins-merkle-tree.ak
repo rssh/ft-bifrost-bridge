@@ -20,7 +20,6 @@ pub type SpendRedeemer {
 
 validator completed_peg_ins_merkle_tree_validator(
   configNFTPolicyId: ByteArray,
-  configNFTAssetName: ByteArray,
   one_shot_input_ref: OutputReference,
 ) {
   mint(_redeemer: Data, policy_id: PolicyId, self: Transaction) {
@@ -73,7 +72,7 @@ validator completed_peg_ins_merkle_tree_validator(
           redeemer.config_ref_input_index,
         ),
         configNFTPolicyId,
-        configNFTAssetName,
+        constants.config_nft_asset_name,
       )
     let peg_in_withdraw_script_hash =
       config.get_peg_in_script_hash(config_fields)

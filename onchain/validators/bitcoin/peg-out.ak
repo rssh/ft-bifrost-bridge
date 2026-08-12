@@ -235,7 +235,7 @@ const t_dest_spk: ByteArray = #"0014abababababababababababababababababab"
 //relative to it + peg_out_cancel_timeout_ms.
 const t_created: Int = 1_700_000_000_000
 
-//The rev-5.4 fifteen-field Config datum (spec §Config datum), built as raw
+//The rev-5.5 twelve-field Config datum (spec §Config datum), built as raw
 //Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
 //3 bridge_state_policy, 4 tm_script_hash [CFG-2], 5 peg_in_script_hash,
 //6 peg_out_script_hash, 7 spo_bans_policy_id, 8 base_ban_duration_ms,

@@ -608,7 +608,7 @@ fn t_recipient() -> Address {
   }
 }
 
-//The rev-5.4 fifteen-field Config datum (spec §Config datum), raw on
+//The rev-5.5 twelve-field Config datum (spec §Config datum), raw on
 //purpose:
 //readers use positional getters, so the fixture mirrors the wire encoding.
 fn t_config_datum_data() -> Data {

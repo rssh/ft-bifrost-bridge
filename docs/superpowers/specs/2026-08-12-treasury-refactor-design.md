@@ -9,8 +9,9 @@ the Treasury state UTxO. It makes seven changes:
    singleton by construction.
 2. The Treasury state NFT asset name becomes the constant `"BFRTRY"`.
 3. The mint redeemer is deleted, and the bootstrap datum is verified instead.
-4. A `Retire` branch lets the Treasury state UTxO be spent and its NFT burned,
-   gated on the Config NFT burn.
+4. A `Retire` branch lets the Treasury state UTxO be spent and its NFT burned.
+   It is gated on the Config NFT burn, and `config.ak`'s own `Retire` is gated on
+   this one ([CFG-8]) — mutually, so neither can be retired alone.
 5. `last_reset_tm_txid` is deleted, and `y_federation` and
    `federation_csv_blocks` move to the Config datum.
 6. `spos-registry.ak` authenticates the Treasury state UTxO by NFT, which it
@@ -23,9 +24,12 @@ The Config datum is re-indexed and every validator gets a new hash, including
 `bridged-token.ak`, so fSAT is minted under a new policy id. Tokens held under
 the old policy are not carried forward.
 
-> **Implementation status.** Nothing here is implemented. Every check ID marked
-> new, revised or withdrawn describes the target state, not the code.
-> §Consumers that move lists each reader that changes.
+> **Implementation status.** IMPLEMENTED on-chain, and reviewed. Two rules were
+> added during review and are not described below: [CFG-8] makes the Config and
+> Treasury retirements mutually required, and [TSY-23]/[TSY-24] stop the
+> registry's `Bootstrap` mint from satisfying [TSY-13]. Both are in
+> `documentation/technical_documentation.md`, which is authoritative. The
+> heimdall builders follow in their own repository.
 
 ## Definitions and Abbreviations
 
@@ -184,11 +188,23 @@ ignore it.
 
 ```aiken
 pub type TreasurySpendRedeemer {
-  RegistryUpdate { new_bifrost_identity_root: ByteArray, config_ref_input_index: Int }
-  UpdateY { new_spos_frost_key: ByteArray, epoch: Int, signature: ByteArray, config_ref_input_index: Int }
+  RegistryUpdate { config_ref_input_index: Int }
+  UpdateY { epoch: Int, signature: ByteArray, config_ref_input_index: Int }
   Retire
 }
 ```
+
+> **Revised during implementation.** This block first declared
+> `RegistryUpdate { new_bifrost_identity_root, config_ref_input_index }` and
+> `UpdateY { new_spos_frost_key, epoch, signature, config_ref_input_index }`.
+> Neither named value survived: the continuing output's datum is the only source
+> of truth for both, so a redeemer copy could only restate it.
+> `new_bifrost_identity_root` was never constrained by `treasury.ak` at all —
+> `spos-registry.ak` owns that value through the [REG-5] MPF proof — and reading
+> `new_spos_frost_key` from the datum is safe because `rotation_sig_msg` commits
+> to it, so changing the datum's key invalidates the signature. Each field was
+> also 32 bytes of witness paid for on every update, and one more pair of values
+> that had to agree.
 
 * **[TSY-2]** NEW. `treasury.ak` MUST locate the Config reference input by the
   redeemer's `config_ref_input_index`. It MUST NOT scan `reference_inputs` for

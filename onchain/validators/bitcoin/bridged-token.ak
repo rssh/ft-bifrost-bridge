@@ -17,11 +17,11 @@ pub type MintRedeemer {
 }
 
 //The fSAT minting policy: an immutable presence delegator. Its script hash is
-//the stable fSAT policy id (ConfigDatum field 1). It authorizes a mint (qty>0)
+//the stable fSAT policy id (ConfigDatum field 2). It authorizes a mint (qty>0)
 //by requiring the peg-in withdraw script to run, and a burn (qty<0) by
 //requiring the peg-out withdraw script; those validators constrain the mint
 //amount on every action (peg completion pins it; Close and Cancel forbid it).
-//This policy adds the single-asset-name guard and the config[1]==policy_id
+//This policy adds the single-asset-name guard and the config[2]==policy_id
 //anchor.
 validator bridged_token(configNFTPolicyId: ByteArray) {
   mint(redeemer: MintRedeemer, policy_id: PolicyId, self: Transaction) {
@@ -34,7 +34,7 @@ validator bridged_token(configNFTPolicyId: ByteArray) {
         configNFTPolicyId,
         constants.config_nft_asset_name,
       )
-    //Anchor: the peg validators constrain the mint of config[1]; it must be us.
+    //Anchor: the peg validators constrain the mint of config[2]; it must be us.
     expect config.get_bridged_token_policy(config_fields) == policy_id
     //spec [CFG-1]: the asset name is a protocol constant, not a Config field
     let asset_name = constants.bridged_token_asset_name
@@ -80,7 +80,7 @@ const t_peg_in_hash: ByteArray =
 const t_peg_out_hash: ByteArray =
   #"aa777777777777777777777777777777777777777777777777777777"
 
-//The rev-5.4 fifteen-field Config datum (spec §Config datum), built as raw
+//The rev-5.5 twelve-field Config datum (spec §Config datum), built as raw
 //Data: 0 update_auth, 1 bridged_token_policy, 2 completed_peg_ins_policy,
 //3 bridge_state_policy, 4 tm_script_hash [CFG-2], 5 peg_in_script_hash,
 //6 peg_out_script_hash, 7 spo_bans_policy_id, 8 base_ban_duration_ms,

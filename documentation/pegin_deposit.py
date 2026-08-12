@@ -6,8 +6,10 @@ documentation/bitcoin_tx_construction.md §1. Transaction layout:
 
     in  : your P2WPKH funding UTXO (one, auto-selected via the node)
     out0: peg-in P2TR (value = --amount sat)          # Taproot(Y_fed, refund tapleaf)
-    out1: OP_RETURN "BFR" || D || Q_auth   # 67-byte dual-key beacon: refund key, then auth key
-                                                       #   output key = the BIP-322 completion key
+    out1: OP_RETURN "BFR" || Q_auth                   # 35-byte one-key beacon: the depositor's
+                                                       #   Taproot output key, which is both the
+                                                       #   refund-leaf key and the BIP-322
+                                                       #   completion key
     out2: P2WPKH change (omitted if below dust)
 
 Usage:
@@ -132,8 +134,11 @@ def _pushnum(n):                     # minimal CScriptNum push of a small positi
     while x: b += bytes([x & 0xff]); x >>= 8
     if b and b[-1] & 0x80: b += b"\x00"
     return bytes([len(b)]) + b
-def pegin_outputkey(xonly):
-    leaf = _pushnum(REFUND_TIMEOUT) + bytes([0xb2, 0x75, 0x20]) + xonly + bytes([0xac])
+def pegin_outputkey(depositor_key):
+    # The refund leaf commits the depositor's Taproot OUTPUT key — the same key the
+    # beacon carries and the completion's BIP-322 signature verifies against. A wallet
+    # spends this leaf with its DEFAULT signer, that key being what it signs with.
+    leaf = _pushnum(REFUND_TIMEOUT) + bytes([0xb2, 0x75, 0x20]) + depositor_key + bytes([0xac])
     leafhash = tagged("TapLeaf", bytes([0xc0, len(leaf)]) + leaf)   # len(leaf) < 253
     t = int.from_bytes(tagged("TapTweak", Y_51 + leafhash), "big")
     Q = add(lift_x(int.from_bytes(Y_51, "big")), mul(t))
@@ -170,24 +175,25 @@ def build(wif, amount, fee, auth_output_key=None):
     h160 = hash160(pub)
     funding_spk = b"\x00\x14" + h160                  # P2WPKH scriptPubKey
     p2wpkh = segwit_addr(0, h160)
-    okey = pegin_outputkey(xonly)
-    pegin_spk = b"\x51\x20" + okey
-    pegin_addr = segwit_addr(1, okey)
-    # The beacon carries BOTH depositor keys, 67 bytes: D then Q_auth.
-    #   D      = `xonly`, the raw internal key committed in the refund leaf above. Carrying it
-    #            means a sweeper READS the refund key instead of guessing it by trying candidate
-    #            outputs against the reconstructed peg-in script.
-    #   Q_auth = the BIP-322 completion key: the WIF's own key-path Taproot output key by default,
-    #            or --auth-output-key to authorize the mint from a DIFFERENT wallet (e.g. UniSat).
-    # The refund leaf + funding stay with the WIF; only the mint authorization moves.
+    # ONE key does both jobs, 35-byte beacon: it is committed in the refund leaf AND is
+    # the key the BIP-322 completion signature verifies against. A sweeper READS it
+    # instead of guessing, because the key the beacon carries is the key the leaf commits.
+    #   default          = the WIF's own key-path Taproot output key (BIP-86).
+    #   --auth-output-key = a DIFFERENT wallet's output key (e.g. UniSat).
+    # NOTE the consequence, which is deliberate: that flag now hands the other wallet the
+    # REFUND path too, not just the mint authorization. Funding no longer separates from
+    # authorization — whoever can complete can refund, and the WIF cannot.
     if auth_output_key:
-        auth_outputkey = bytes.fromhex(auth_output_key)
-        if len(auth_outputkey) != 32:
+        depositor_key = bytes.fromhex(auth_output_key)
+        if len(depositor_key) != 32:
             raise SystemExit("--auth-output-key must be 32 bytes (64 hex chars)")
     else:
-        auth_outputkey = taproot_keypath_output_key(xonly)
-    auth_addr = segwit_addr(1, auth_outputkey)           # sign the BIP-322 completion from here
-    beacon_spk = b"\x6a\x43\x42\x46\x52" + xonly + auth_outputkey   # 6a 43 "BFR" D Q_auth
+        depositor_key = taproot_keypath_output_key(xonly)
+    auth_addr = segwit_addr(1, depositor_key)            # sign the BIP-322 completion from here
+    okey = pegin_outputkey(depositor_key)
+    pegin_spk = b"\x51\x20" + okey
+    pegin_addr = segwit_addr(1, okey)
+    beacon_spk = b"\x6a\x23\x42\x46\x52" + depositor_key            # 6a 23 "BFR" Q_auth
 
     unspents = rpc("scantxoutset", ["start", [f"addr({p2wpkh})"]]).get("unspents", [])
     need = amount + fee
@@ -231,7 +237,9 @@ def main():
     ap.add_argument("--test", action="store_true", help="validate via testmempoolaccept (no broadcast)")
     ap.add_argument("--auth-output-key", help="32-byte hex Taproot output key for the BFR beacon "
                     "(default: derived from --wif); set to another wallet's output key (e.g. UniSat) "
-                    "to authorize the BIP-322 completion from there")
+                    "to authorize the BIP-322 completion from there. WARNING: this key is also "
+                    "committed in the refund leaf, so that wallet — not --wif — can refund this "
+                    "deposit after the timeout")
     a = ap.parse_args()
     wif = a.wif if a.wif else open(a.wif_file).read().strip()
     raw, pegin_addr, p2wpkh, change, auth_addr = build(wif, a.amount, a.fee, a.auth_output_key)

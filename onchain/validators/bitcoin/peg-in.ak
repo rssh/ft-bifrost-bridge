@@ -1187,12 +1187,13 @@ test close_rejects_fbtc_minted() fail {
 
 //A hand-built non-witness peg-in deposit tx (copied from
 //lib/bifrost/bitcoin.ak's sample_deposit_tx, private there): vout 0 = P2TR
-//(0x5120…) worth 100000 sat, vout 1 = BFR OP_RETURN committing refund key
-//dd*32 and depositor auth key cc*32.
+//(0x5120…) worth 100000 sat, vout 1 = BFR OP_RETURN (6a 23 "BFR" ‖ 32B)
+//committing the depositor key cc*32 — the single key that both authorizes
+//completion and is committed in the deposit's refund leaf.
 const t_mint_deposit_tx: ByteArray =
-  #"020000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff02a086010000000000225120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0000000000000000456a43424652ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000"
+  #"020000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff02a086010000000000225120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0000000000000000256a23424652cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000"
 
-//The depositor auth key the deposit's OP_RETURN beacon commits.
+//The depositor key the deposit's OP_RETURN beacon commits.
 const t_mint_xonly: ByteArray =
   #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 

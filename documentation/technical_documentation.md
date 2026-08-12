@@ -1929,7 +1929,7 @@ These are the steps to execute a correct peg-in:
 
 * Check the status of Bifrost. The peg-in can proceed if the bridge is operational and the current Cardano epoch is not near its end.
 * Retrieve the current Treasury key $Y_{51}$ from `treasury.ak` on Cardano (published there after each DKG).
-* On Bitcoin, send the BTC to peg-in to a Taproot address derived from $Y_{51}$, the federation fallback script, and the depositor refund leaf (see **Taproot address construction** below). The address has three spending paths: the $Y_{51}$ key path (SPO sweep — main line), a $Y_{federation}$ script leaf (federation emergency sweep after timeout), and the depositor refund leaf (reclaim after ~30 days). The transaction MUST include an OP_RETURN **beacon**: `"BFR" ‖ D (32 B) ‖ Q_auth (32 B)` (67 bytes). `D` is the depositor's x-only refund key — SPOs need it to reconstruct the refund leaf and compute the key-path sweep tweak. `Q_auth` is the Taproot output key of the wallet that will sign the BIP-322 completion. By default `Q_auth = BIP86(D)`; a different wallet's key MAY be used — authorization is decoupled from funding.
+* On Bitcoin, send the BTC to peg-in to a Taproot address derived from $Y_{51}$, the federation fallback script, and the depositor refund leaf (see **Taproot address construction** below). The address has three spending paths: the $Y_{51}$ key path (SPO sweep — main line), a $Y_{federation}$ script leaf (federation emergency sweep after timeout), and the depositor refund leaf (reclaim after ~30 days). The transaction MUST include an OP_RETURN **beacon**: `"BFR" ‖ Q_auth (32 B)` (35 bytes). `Q_auth` is the depositor's Taproot **output** key, and it serves both roles: SPOs reconstruct the refund leaf and the key-path sweep tweak from it, and it is the key that signs the BIP-322 completion. A different wallet's key MAY be named, but that wallet then owns **both** the completion and the refund — authorization is no longer decoupled from funding.
 * Wait for watchtowers to detect the Bitcoin transaction, post the corresponding Bitcoin block to the Binocular Oracle, and create a PegInRequest UTxO on Cardano (peg-in.ak) by minting a PegInRequest NFT and providing a transaction inclusion proof.
 * Wait for the peg-in to be included in the Treasury Movement transaction at the next epoch boundary. In the normal 51% mode, SPOs sign this transaction with FROST and post it to Cardano (`TreasuryMovementValidator`); in the emergency mode, the federation satisfies the $Y_{federation}$ fallback script path instead. Watchtowers then relay the signed transaction to Bitcoin.
 * Once the Treasury Movement transaction is confirmed on Bitcoin (its Confirm advanced the bridge state singleton), the depositor completes the peg-in on Cardano. The depositor spends the PegInRequest UTxO, references the bridge state singleton, and provides a membership proof that the swept-peg-ins trie records the deposit ([CPI-9]), a non-membership proof against the completed-peg-ins trie, and a **BIP-322** signature under the beacon's `Q_auth`. The validator also parses the raw peg-in transaction from the PegInRequest datum to check the deposit data (the only point where the peg-in transaction is parsed on-chain). This mints the correct amount of fBTC to the Cardano address the depositor chooses and inserts the peg-in into the completed-peg-ins trie. Full checks: *Complete peg-in* ([CPI-3]…[CPI-10]).
@@ -1959,7 +1959,7 @@ sequenceDiagram
     Note over Dep,TRE: Phase 1 — Bitcoin deposit
     Dep->>TRE: Read current Y₅₁ and Y_federation from treasury.ak
     Dep->>Dep: Derive peg-in Taproot address Q<br/>(Y₅₁ key path · Y_fed+CSV leaf · depositor refund leaf)
-    Dep->>BTC: Send BTC to Q with OP_RETURN beacon<br/>"BFR" ‖ D (refund key) ‖ Q_auth (67 B)
+    Dep->>BTC: Send BTC to Q with OP_RETURN beacon<br/>"BFR" ‖ Q_auth (35 B)
 
     Note over BTC,Bin: Phase 2 — Bitcoin state relayed to Cardano
     loop Continuous, competitive block relay
@@ -2054,10 +2054,13 @@ Script leaf 1 (federation emergency sweep):
 
 Script leaf 2 (depositor refund — same shape as the federation leaf):
 ```
-<refund_timeout> OP_CHECKSEQUENCEVERIFY OP_DROP <D> OP_CHECKSIG
+<refund_timeout> OP_CHECKSEQUENCEVERIFY OP_DROP <Q_auth> OP_CHECKSIG
 ```
+The leaf commits the depositor's Taproot **output** key, the same key the beacon carries.
+A wallet therefore spends this leaf with its **default** signer, that key being the one it
+signs with; no untweaked-signing interface is required.
 
-`D` is the depositor's 32-byte x-only refund key, taken from the beacon. `refund_timeout` is a per-instance constant (constraint: `> federation_csv_blocks`, so the federation can sweep before the refund opens; example 4320 blocks ≈ 30 days).
+`Q_auth` is the depositor's 32-byte Taproot output key, taken from the beacon. `refund_timeout` is a per-instance constant (constraint: `> federation_csv_blocks`, so the federation can sweep before the refund opens; example 4320 blocks ≈ 30 days).
 
 Merkle tree (2 leaves):
 ```
@@ -2081,7 +2084,7 @@ Where:
 
 The resulting Bitcoin address is `bc1p<bech32m(Q)>`.
 
-**To reconstruct $Q$**, all components are available: $Y_{51}$ and $Y_{federation}$ from `treasury.ak`, and the depositor's refund key `D` from the beacon (propagated via the PegInRequest datum). Both scripts are fully determined by these parameters — no secret information is needed.
+**To reconstruct $Q$**, all components are available: $Y_{51}$ and $Y_{federation}$ from `treasury.ak`, and the depositor's output key `Q_auth` from the beacon (propagated via the PegInRequest datum). Both scripts are fully determined by these parameters — no secret information is needed.
 
 #### Parity normalization (BIP340/341)
 
@@ -2104,7 +2107,7 @@ Both quorum levels construct **full** Treasury Movement transactions (sweeping p
 
 **Key path on Treasury, key path on peg-in inputs (51% quorum — main line):**
 
-SPOs collect all confirmed PegInRequest and PegOut UTxOs from Cardano and construct a full Treasury Movement transaction. They spend both the treasury UTxO and the peg-in UTxOs via key path ($Y_{51}$) — a single 64-byte FROST Schnorr signature per input. To sign peg-in inputs, SPOs compute the tweaked private key: `d = y_51' + tagged_hash("TapTweak", Y_51 || merkle_root) (mod n)`, where $y_{51}$ is the FROST group private key (held as shares) and `y_51'` is $y_{51}$ **parity-normalized** — with `d` itself negated when the resulting output key has odd Y (see *Parity normalization* above; both rules are consensus-critical). Computing the merkle_root requires the depositor's x-only refund key `D` (for the refund leaf) and $Y_{federation}$ (for the federation leaf) — `D` comes from the beacon in the raw peg-in transaction held by the PegInRequest datum, $Y_{federation}$ from `treasury.ak`. This is the cheapest spending path.
+SPOs collect all confirmed PegInRequest and PegOut UTxOs from Cardano and construct a full Treasury Movement transaction. They spend both the treasury UTxO and the peg-in UTxOs via key path ($Y_{51}$) — a single 64-byte FROST Schnorr signature per input. To sign peg-in inputs, SPOs compute the tweaked private key: `d = y_51' + tagged_hash("TapTweak", Y_51 || merkle_root) (mod n)`, where $y_{51}$ is the FROST group private key (held as shares) and `y_51'` is $y_{51}$ **parity-normalized** — with `d` itself negated when the resulting output key has odd Y (see *Parity normalization* above; both rules are consensus-critical). Computing the merkle_root requires the depositor's Taproot output key `Q_auth` (for the refund leaf) and $Y_{federation}$ (for the federation leaf) — `Q_auth` comes from the beacon in the raw peg-in transaction held by the PegInRequest datum, $Y_{federation}$ from `treasury.ak`. This is the cheapest spending path.
 
 **Script path on Treasury, script path on peg-in inputs (federation — emergency):**
 
@@ -2118,7 +2121,7 @@ After ~30 days (4320 blocks), the depositor reveals the depositor refund script 
 
 Plutus V3 does not expose secp256k1 point arithmetic builtins (only `verifySchnorrSecp256k1Signature` and `verifyEcdsaSecp256k1Signature`), so `peg-in.ak` **cannot** reconstruct $Q$ from $Y_{51}$, $Y_{federation}$, and the depositor's script on-chain.
 
-Instead, each SPO verifies Taproot address correctness **off-chain**. Before including a peg-in in the Treasury Movement transaction, each SPO independently reconstructs the expected peg-in Taproot address from $Y_{51}$, $Y_{federation}$, and the depositor's refund key `D` (read from the beacon in the PegInRequest datum). The SPO then verifies it matches the Bitcoin transaction output. An SPO MUST skip a PegInRequest whose Taproot address does not reconstruct. An SPO MUST NOT sign a Treasury Movement transaction that spends UTxOs the roster cannot actually spend.
+Instead, each SPO verifies Taproot address correctness **off-chain**. Before including a peg-in in the Treasury Movement transaction, each SPO independently reconstructs the expected peg-in Taproot address from $Y_{51}$, $Y_{federation}$, and the depositor's output key `Q_auth` (read from the beacon in the PegInRequest datum). The SPO then verifies it matches the Bitcoin transaction output. An SPO MUST skip a PegInRequest whose Taproot address does not reconstruct. An SPO MUST NOT sign a Treasury Movement transaction that spends UTxOs the roster cannot actually spend.
 
 > **Why this is safe.**
 >
@@ -2225,7 +2228,7 @@ This section is the normative reference for every on-chain transaction the proto
 flowchart LR
   dep_in["Depositor BTC UTxOs"] --> tx{{"Peg-in deposit (Bitcoin)"}}
   tx --> pegin["Peg-in UTxO<br/>@ Taproot Q<br/>(paths: Y₅₁ key · Y_fed+CSV · refund)"]
-  tx --> opret["OP_RETURN beacon<br/>BFR ‖ D ‖ Q_auth"]
+  tx --> opret["OP_RETURN beacon<br/>BFR ‖ Q_auth"]
   tx --> change["Change → depositor"]
 ```
 
@@ -2234,7 +2237,7 @@ flowchart LR
 | Role | Content |
 |------|---------|
 | **Inputs** | Depositor BTC UTxOs — funds the peg-in amount + BTC fees |
-| **Outputs** | Peg-in UTxO at Taproot address $Q$ (holds the BTC to be bridged); OP_RETURN beacon `"BFR" ‖ D ‖ Q_auth` (67 bytes); optional change → depositor |
+| **Outputs** | Peg-in UTxO at Taproot address $Q$ (holds the BTC to be bridged); OP_RETURN beacon `"BFR" ‖ Q_auth` (35 bytes); optional change → depositor |
 | **Signer** | depositor (their Bitcoin keys) |
 | **Validity** | standard Bitcoin transaction |
 | **Size (est.)** | ~220 vB (1 P2WPKH input + 3 outputs: P2TR peg-in ~43 B, OP_RETURN ~34 B, P2WPKH change ~31 B) |
@@ -2255,11 +2258,58 @@ Key path ($Y_{51}$) is the main line: it is how SPOs sweep this UTxO into the ne
 **Checks delegated off-chain** (the depositor — no party will save them otherwise)
 
 * The depositor MUST construct $Q$ from the **current** $Y_{51}$ published in `treasury.ak` and $Y_{federation}$. Using a stale $Y_{51}$ makes the peg-in unsweepable — the depositor must then wait out the ~30-day refund.
-* The depositor MUST include the OP_RETURN beacon, equal to `BFR ‖ D ‖ Q_auth` — otherwise watchtowers will not detect the deposit and no PegInRequest will ever be created.
-* `D` MUST be the key whose refund leaf is committed in the address — else the refund path is unspendable.
-* `Q_auth` MUST be a key the depositor can BIP-322-sign with — else completion is impossible.
+* The depositor MUST include the OP_RETURN beacon, equal to `BFR ‖ Q_auth` — otherwise watchtowers will not detect the deposit and no PegInRequest will ever be created.
+* `Q_auth` MUST be the key whose refund leaf is committed in the address — else the refund path is unspendable.
+* `Q_auth` MUST be a key the depositor can BIP-322-sign with — else completion is impossible. Both MUSTs bind the same key, which is the point of the one-key form: they cannot disagree.
 
-> **Implementation status.** The 67-byte form above is implemented: `bitcoin.ak` parses it (`get_op_return_refund_key` / `get_op_return_xonly`) and `pegin_deposit.py` builds it. The earlier 35-byte demo beacon carried `Q_auth` only, so `D` had to reach the sweeper out of band or be guessed; it is now **refused outright**, not dual-read — accepting it would keep that guessing path alive for exactly the deposits it exists to remove. A deposit made under the old form against an instance deployed before this change cannot be swept by the new `peg_in` validator.
+> **Implementation status.** The 35-byte form above is implemented: `bitcoin.ak` parses it (`get_op_return_depositor_key`) and `pegin_deposit.py` builds it. Two earlier forms are **refused outright**, not dual-read: the 67-byte dual-key beacon `"BFR" ‖ D ‖ Q_auth`, and the original 35-byte demo beacon, which carried `Q_auth` while the refund leaf held a *different* key `D`, so `D` had to reach the sweeper out of band or be guessed. Accepting any of them alongside this one would keep that guessing path alive for exactly the deposits this form removes. A deposit made under an older form against an instance deployed before this change cannot be swept by the new `peg_in` validator.
+
+> **Decision, 2026-08-12: the beacon returns to ONE key, and that key is $Q_{auth}$.**
+> The beacon becomes `"BFR" ‖ Q_auth` (35 bytes), and **the refund leaf holds
+> $Q_{auth}$ too** — so the same key authorizes completion and spends the refund
+> path, and $D$ disappears from the protocol. The 67-byte form above stands until
+> that lands; no production deposit has been made under it.
+>
+> **This is not the retired 35-byte demo beacon, and the difference is the whole
+> point.** That form also carried $Q_{auth}$ alone — but its refund leaf held a
+> *different* key $D$, so a sweeper had to receive $D$ out of band or guess it. Here
+> the leaf holds the key the beacon carries. Nothing is guessed, nothing is
+> recovered, and the ambiguity that form was refused for cannot arise.
+>
+> **On-chain derivability, stated as fact rather than assumption.** A one-key beacon
+> was previously believed to require deriving $Q_{auth} = BIP86(D)$ on-chain, which is
+> impossible: Plutus V3 has no secp256k1 point addition or scalar multiplication (the
+> same gap that forces off-chain Taproot address verification — see *Taproot address
+> verification*). **That reasoning never applies here.** Nothing is derived, because
+> the key that is carried is the key that is used, on both paths. On-chain the
+> completion check is *unchanged*: `bip322.verify_keypath(user_source_chain_pub_key,
+> …)` continues to verify a BIP-322 signature under the depositor's Taproot **output**
+> key, exactly as today. Only `bitcoin.ak`'s beacon parsing changes width.
+>
+> **Why not the raw key $D$**, which this note previously specified: completion under
+> $D$ requires the wallet to sign the BIP-322 `to_sign` transaction with an
+> **untweaked** signer, since `signMessage(msg, "bip322-simple")` signs under the
+> tweaked key. Measured on Unisat 2026-08-12: it produced no such signature through
+> its generic `signPsbt` — one PSBT variant returned an internal TypeError, the other
+> an approval popup reading *"the psbt or param is invalid"*. The same wallet signed a
+> tapleaf `<csv> OP_CSV OP_DROP <Q_auth> OP_CHECKSIG` with its **default** signer, with
+> no special flag. `disableTweakSigner` is in any case Unisat-specific and no part of
+> BIP-322, so a form depending on it narrows wallet support; this form does not depend
+> on it at all.
+>
+> **What is given up, and it is one thing, deliberately.** **Authorization is no
+> longer decoupled from funding.** The paragraph above ("a different wallet's key MAY
+> be used") is withdrawn: whoever can spend the refund leaf is whoever can complete the
+> peg-in. No requirement asks for a third-party funder, and the alternative costs 32
+> bytes on every deposit plus a second parse path.
+>
+> **What is NOT given up.** Completion still works from any wallet that implements
+> BIP-322 message signing for a Taproot address — [CPI-3]'s rule survives intact,
+> which is what decided this form over $D$. The one new wallet requirement falls on the
+> **refund** path, which needs a wallet that will sign a custom tapleaf (demonstrated on
+> Unisat; unmeasured elsewhere). A wallet that cannot loses only the ~30-day refund, not
+> the ability to complete — a degradation rather than a lockout. Deployments SHOULD
+> publish which wallets they have verified for the refund path.
 
 ### Create PegInRequest (Cardano)
 
@@ -2305,8 +2355,8 @@ flowchart LR
 
 **Checks delegated off-chain** (each SPO, before signing the TM — Plutus V3 cannot do secp256k1 point arithmetic)
 
-* Each SPO MUST verify the BTC output pays a valid Bifrost peg-in Taproot address (reconstructed from $Y_{51}$, $Y_{federation}$, and the depositor's refund key `D` from the beacon).
-* Each SPO MUST verify the OP_RETURN beacon equals `BFR ‖ D ‖ Q_auth`.
+* Each SPO MUST verify the BTC output pays a valid Bifrost peg-in Taproot address (reconstructed from $Y_{51}$, $Y_{federation}$, and the depositor's output key `Q_auth` from the beacon).
+* Each SPO MUST verify the OP_RETURN beacon equals `BFR ‖ Q_auth`.
 * Each SPO MUST verify the claimed peg-in amount matches the BTC output amount.
 
 If any off-chain check fails, the SPO MUST skip this PegInRequest. No fund risk, no theft risk — griefing cost = NFT minting fee + MIN_ADA.
@@ -2765,6 +2815,13 @@ flowchart LR
   rather than a raw BIP340 signature over the hash — is what makes completion possible from any
   standard Taproot wallet (`signMessage(text, "bip322-simple")`); raw-key signing interfaces are
   not generally wallet-accessible.
+
+  > **Unaffected by the 2026-08-12 beacon decision, and deliberately so.** The beacon shrinks to
+  > `"BFR" ‖ Q_auth` (35 bytes) — see the decision note under *Deposit (Bitcoin)* — but this rule
+  > does not move: the auth key is still `Q_auth`, still the Taproot **output** key, still
+  > BIP-322-signed, so completion still works from any standard Taproot wallet via
+  > `signMessage(text, "bip322-simple")`. Preserving exactly this sentence is why the beacon
+  > carries `Q_auth` rather than the raw key `D`; under `D` it would have been false.
 
   * `"BFR-mint-v1"` — domain-separation tag (BIP340 practice).
   * `peg_in_utxo_id` — binds the signature to **this specific peg-in**. Without it, if a depositor reused the same BTC pubkey across multiple peg-ins in the same TM, publishing the signature to claim one would let an attacker replay it to claim the others.
@@ -4633,7 +4690,7 @@ In what follows we summarize the *preprocess* and signing stages according to th
 A Treasury Movement transaction has multiple inputs — one treasury UTxO plus $k$ peg-in UTxOs — and **each input requires a separate FROST signing round**. This is because:
 
 - **Different sighash per input**: BIP341 sighash commits to the input index, so each input has a distinct 32-byte message to sign.
-- **Different tweaked key per input**: each input has a different Taproot tree (the treasury tree differs from peg-in trees, and each peg-in tree differs because the refund key `D` varies), producing a different tweak and therefore a different effective signing key.
+- **Different tweaked key per input**: each input has a different Taproot tree (the treasury tree differs from peg-in trees, and each peg-in tree differs because the depositor's key `Q_auth` varies), producing a different tweak and therefore a different effective signing key.
 
 With `SIGHASH_ALL` (default for Taproot), each signature commits to all inputs and all outputs, but a per-input signature is still required. For a TM transaction with $k+1$ inputs, SPOs run $k+1$ parallel FROST signing rounds.
 
@@ -5055,7 +5112,7 @@ Beyond maintaining general Bitcoin state, watchtowers perform specialized duties
 **Peg-in Detection and Posting**
 
 * Monitor the Bitcoin network for peg-in transactions by scanning for OP_RETURN outputs with the `"BFR"` prefix.
-* Each peg-in transaction sends BTC to a unique Taproot address ($Y_{51}$ key path for SPO sweep, $Y_{federation}$ script leaf for federation emergency sweep, or a depositor timeout script leaf for self-refund; see **Taproot address construction**) and includes the OP_RETURN beacon `"BFR" ‖ D ‖ Q_auth` (67 bytes): `D` lets SPOs reconstruct the refund leaf and the key-path sweep tweak; `Q_auth` is the BIP-322 completion key. Because each peg-in goes to a unique Taproot address (derived from the depositor's refund key), watchtowers cannot track peg-ins by address alone — the beacon is what makes them identifiable.
+* Each peg-in transaction sends BTC to a unique Taproot address ($Y_{51}$ key path for SPO sweep, $Y_{federation}$ script leaf for federation emergency sweep, or a depositor timeout script leaf for self-refund; see **Taproot address construction**) and includes the OP_RETURN beacon `"BFR" ‖ Q_auth` (35 bytes): `Q_auth` is the depositor's Taproot output key, which lets SPOs reconstruct the refund leaf and the key-path sweep tweak and is also the BIP-322 completion key. Because each peg-in goes to a unique Taproot address (derived from that key), watchtowers cannot track peg-ins by address alone — the beacon is what makes them identifiable.
 * Once a peg-in transaction reaches the required confirmation threshold (100 Bitcoin blocks plus 200 minutes of Binocular challenge period), watchtowers create a PegInRequest UTxO on Cardano (peg-in.ak) by:
   * Minting a PegInRequest NFT.
   * Providing a transaction inclusion proof consisting of: the raw Bitcoin transaction data, a Merkle proof linking the transaction to the block's Merkle root, and an inclusion proof of the confirmed block in the Binocular Oracle.

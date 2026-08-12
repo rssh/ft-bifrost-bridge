@@ -2261,6 +2261,53 @@ Key path ($Y_{51}$) is the main line: it is how SPOs sweep this UTxO into the ne
 
 > **Implementation status.** The 67-byte form above is implemented: `bitcoin.ak` parses it (`get_op_return_refund_key` / `get_op_return_xonly`) and `pegin_deposit.py` builds it. The earlier 35-byte demo beacon carried `Q_auth` only, so `D` had to reach the sweeper out of band or be guessed; it is now **refused outright**, not dual-read — accepting it would keep that guessing path alive for exactly the deposits it exists to remove. A deposit made under the old form against an instance deployed before this change cannot be swept by the new `peg_in` validator.
 
+> **Decision, 2026-08-12: the beacon returns to ONE key, and that key is $Q_{auth}$.**
+> The beacon becomes `"BFR" ‖ Q_auth` (35 bytes), and **the refund leaf holds
+> $Q_{auth}$ too** — so the same key authorizes completion and spends the refund
+> path, and $D$ disappears from the protocol. The 67-byte form above stands until
+> that lands; no production deposit has been made under it.
+>
+> **This is not the retired 35-byte demo beacon, and the difference is the whole
+> point.** That form also carried $Q_{auth}$ alone — but its refund leaf held a
+> *different* key $D$, so a sweeper had to receive $D$ out of band or guess it. Here
+> the leaf holds the key the beacon carries. Nothing is guessed, nothing is
+> recovered, and the ambiguity that form was refused for cannot arise.
+>
+> **On-chain derivability, stated as fact rather than assumption.** A one-key beacon
+> was previously believed to require deriving $Q_{auth} = BIP86(D)$ on-chain, which is
+> impossible: Plutus V3 has no secp256k1 point addition or scalar multiplication (the
+> same gap that forces off-chain Taproot address verification — see *Taproot address
+> verification*). **That reasoning never applies here.** Nothing is derived, because
+> the key that is carried is the key that is used, on both paths. On-chain the
+> completion check is *unchanged*: `bip322.verify_keypath(user_source_chain_pub_key,
+> …)` continues to verify a BIP-322 signature under the depositor's Taproot **output**
+> key, exactly as today. Only `bitcoin.ak`'s beacon parsing changes width.
+>
+> **Why not the raw key $D$**, which this note previously specified: completion under
+> $D$ requires the wallet to sign the BIP-322 `to_sign` transaction with an
+> **untweaked** signer, since `signMessage(msg, "bip322-simple")` signs under the
+> tweaked key. Measured on Unisat 2026-08-12: it produced no such signature through
+> its generic `signPsbt` — one PSBT variant returned an internal TypeError, the other
+> an approval popup reading *"the psbt or param is invalid"*. The same wallet signed a
+> tapleaf `<csv> OP_CSV OP_DROP <Q_auth> OP_CHECKSIG` with its **default** signer, with
+> no special flag. `disableTweakSigner` is in any case Unisat-specific and no part of
+> BIP-322, so a form depending on it narrows wallet support; this form does not depend
+> on it at all.
+>
+> **What is given up, and it is one thing, deliberately.** **Authorization is no
+> longer decoupled from funding.** The paragraph above ("a different wallet's key MAY
+> be used") is withdrawn: whoever can spend the refund leaf is whoever can complete the
+> peg-in. No requirement asks for a third-party funder, and the alternative costs 32
+> bytes on every deposit plus a second parse path.
+>
+> **What is NOT given up.** Completion still works from any wallet that implements
+> BIP-322 message signing for a Taproot address — [CPI-3]'s rule survives intact,
+> which is what decided this form over $D$. The one new wallet requirement falls on the
+> **refund** path, which needs a wallet that will sign a custom tapleaf (demonstrated on
+> Unisat; unmeasured elsewhere). A wallet that cannot loses only the ~30-day refund, not
+> the ability to complete — a degradation rather than a lockout. Deployments SHOULD
+> publish which wallets they have verified for the refund path.
+
 ### Create PegInRequest (Cardano)
 
 **Purpose**: publish on Cardano the claim "a Bitcoin peg-in deposit is confirmed; here is the raw BTC tx and a proof it sits in the confirmed chain", so SPOs can read it when building the next Treasury Movement.
@@ -2765,6 +2812,13 @@ flowchart LR
   rather than a raw BIP340 signature over the hash — is what makes completion possible from any
   standard Taproot wallet (`signMessage(text, "bip322-simple")`); raw-key signing interfaces are
   not generally wallet-accessible.
+
+  > **Unaffected by the 2026-08-12 beacon decision, and deliberately so.** The beacon shrinks to
+  > `"BFR" ‖ Q_auth` (35 bytes) — see the decision note under *Deposit (Bitcoin)* — but this rule
+  > does not move: the auth key is still `Q_auth`, still the Taproot **output** key, still
+  > BIP-322-signed, so completion still works from any standard Taproot wallet via
+  > `signMessage(text, "bip322-simple")`. Preserving exactly this sentence is why the beacon
+  > carries `Q_auth` rather than the raw key `D`; under `D` it would have been false.
 
   * `"BFR-mint-v1"` — domain-separation tag (BIP340 practice).
   * `peg_in_utxo_id` — binds the signature to **this specific peg-in**. Without it, if a depositor reused the same BTC pubkey across multiple peg-ins in the same TM, publishing the signature to claim one would let an attacker replay it to claim the others.

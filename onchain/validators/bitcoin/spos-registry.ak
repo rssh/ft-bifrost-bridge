@@ -17,7 +17,7 @@ use cardano/transaction.{
   placeholder,
 }
 
-const registration_root_key = "reg-root"
+const registration_root_key = constants.registration_root_asset_name
 
 const registration_node_key_prefix = ""
 

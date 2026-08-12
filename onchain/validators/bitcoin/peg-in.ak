@@ -19,7 +19,7 @@ use bifrost/types/peg_in.{
 }
 use bifrost/utils
 use cardano/address.{Address, Credential, Script, VerificationKey}
-use cardano/assets.{AssetName, PolicyId, quantity_of, tokens, without_lovelace}
+use cardano/assets.{PolicyId, quantity_of, tokens, without_lovelace}
 use cardano/script_context.{ScriptContext}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction, ValidityRange,

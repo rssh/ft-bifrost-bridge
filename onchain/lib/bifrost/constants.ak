@@ -2,6 +2,13 @@ pub const btc_asset_name = ""
 
 pub const registered_spos_asset_name = ""
 
+//Asset name of the SPO registration list's ROOT node, minted once by
+//spos-registry.ak's Bootstrap branch. Shared because treasury.ak must tell a
+//registry BOOTSTRAP mint apart from a Register/Deregister mint (spec [TSY-13]):
+//the bootstrap validates no treasury transition at all, so accepting it as the
+//registry's marker would leave bifrost_identity_root unconstrained.
+pub const registration_root_asset_name = "reg-root"
+
 //spec [CFG-7]: the Config NFT asset name is a protocol constant, not a
 //validator parameter. A parameter here has no safe failure mode: a deployment
 //that passes another name leaves treasury.ak looking for a token that does not

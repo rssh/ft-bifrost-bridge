@@ -184,14 +184,32 @@ validator treasury_info(tx0: ByteArray, index0: Int, config_policy_id: PolicyId)
         let config_fields =
           config_fields_at(self, config_policy_id, config_ref_input_index)
         let out_datum = continuing_datum(self, own_hash, own_input)
+        let registry_policy =
+          config_types.get_spos_registry_policy_id(config_fields)
         and {
           // spec [TSY-13]: a Register mints one membership token and a
           // Deregister burns one, so a non-zero sum is the marker. The registry
           // policy is the authority here; this branch only checks that it ran.
-          utils.quantity_of_policy_id(
+          utils.quantity_of_policy_id(self.mint, registry_policy) != 0,
+          // spec [TSY-23]: and the mint MUST NOT be the registry's Bootstrap.
+          // That branch mints the root node and validates NO treasury
+          // transition — it never calls treasury_state_transition_ok — so
+          // accepting it as the marker would let one transaction rewrite
+          // bifrost_identity_root to anything at all. A `#""` root written
+          // there bricks the instance permanently: mpf.from_root demands 32
+          // bytes, so every later Register and Deregister aborts, and the only
+          // branch that could repair the root is the one now aborting.
+          quantity_of(
             self.mint,
-            config_types.get_spos_registry_policy_id(config_fields),
-          ) != 0,
+            registry_policy,
+            constants.registration_root_asset_name,
+          ) == 0,
+          // spec [TSY-24]: the continuing root is a 32-byte MPF root. Defence
+          // in depth behind [TSY-23]: a Register/Deregister necessarily wrote a
+          // real root (spos-registry.ak proved it with an MPF proof, which
+          // itself requires 32 bytes), so this can only fire if that coupling
+          // is ever broken again.
+          bytearray.length(out_datum.bifrost_identity_root) == 32,
           // spec [TSY-15]: the key is preserved, so key rotation cannot ride
           // along on a registration. The new root is whatever the registry's
           // own [REG-5] MPF proof forced it to be; this branch never had a say
@@ -695,7 +713,7 @@ test spend_rejects_input_without_nft() fail {
 
 // A registry token moves: the Register/Deregister marker RegistryUpdate needs.
 fn t_registry_mint(qty: Int) -> assets.Value {
-  assets.from_asset(t_registry_policy, "reg-root", qty)
+  assets.from_asset(t_registry_policy, "pool-id-bytes", qty)
 }
 
 fn t_registry_tx(
@@ -774,6 +792,42 @@ test spend_registry_update_rejects_unauthenticated_config() fail {
     t_registry_update(),
     t_registry_tx(d0, d1, t_registry_mint(1), False),
   )
+}
+
+// spec [TSY-23]: the registry BOOTSTRAP mint is not a Register/Deregister. It
+// validates no treasury transition, so accepting it as the marker would let one
+// transaction write any bifrost_identity_root — including a short one, which
+// bricks every later registration because mpf.from_root demands 32 bytes.
+test spend_registry_update_rejects_registry_bootstrap_mint() fail {
+  let d0 = t_datum(t_root0, t_cur_key)
+  let d1 = t_datum(t_root1, t_cur_key)
+  let bootstrap_mint =
+    assets.from_asset(
+      t_registry_policy,
+      constants.registration_root_asset_name,
+      1,
+    )
+  t_spend(d0, t_registry_update(), t_registry_tx(d0, d1, bootstrap_mint, True))
+}
+
+// spec [TSY-24]: a short root can never continue, whatever the registry minted.
+test spend_registry_update_rejects_short_root() fail {
+  let d0 = t_datum(t_root0, t_cur_key)
+  let d1 = t_datum(#"0000", t_cur_key)
+  t_spend(
+    d0,
+    t_registry_update(),
+    t_registry_tx(d0, d1, t_registry_mint(1), True),
+  )
+}
+
+// A membership token under the SAME policy still passes: [TSY-23] excludes the
+// root asset name, not the policy.
+test spend_registry_update_accepts_membership_token_mint() {
+  let d0 = t_datum(t_root0, t_cur_key)
+  let d1 = t_datum(t_root1, t_cur_key)
+  let member_mint = assets.from_asset(t_registry_policy, "pool-id-bytes", 1)
+  t_spend(d0, t_registry_update(), t_registry_tx(d0, d1, member_mint, True))
 }
 
 // spec [TSY-14]: the value must carry over untouched.

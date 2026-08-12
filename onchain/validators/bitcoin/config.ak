@@ -124,10 +124,25 @@ validator config(tx0: ByteArray, index0: Int) {
       Retire ->
         //The tx burns exactly the config NFT; no continuing output required.
         //The min-ADA goes wherever the authority directs it.
+        //
+        //spec [CFG-8]: it MUST also burn the Treasury state NFT, in this same
+        //transaction. The two retirements are mutually required — treasury.ak's
+        //Retire demands this burn, and this demands that one — because either
+        //alone is a trap. The Config NFT can be burned once; after that
+        //treasury.ak's Retire can never be satisfied again (its check is on a
+        //supply that is now zero) and its other two branches cannot read the
+        //Config they need, so the Treasury state UTxO is unspendable forever
+        //with its min-ADA inside. Requiring both makes that ordering
+        //unreachable rather than merely undocumented.
         and {
           authorized,
           quantity_of_policy_id(self.mint, own_hash) == -1,
           quantity_of(self.mint, own_hash, constants.config_nft_asset_name) == -1,
+          quantity_of(
+            self.mint,
+            configType.get_treasury_info_policy_id(old_fields),
+            constants.treasury_info_nft_asset_name,
+          ) == -1,
         }
     }
   }
@@ -501,6 +516,15 @@ test update_allows_arbitrary_datum_shape() {
   t_spend(old_datum, Update, tx)
 }
 
+//spec [CFG-8]: the Treasury state NFT policy the fixture publishes at Config
+//#10, and the burn of it that every Retire must now carry.
+const t_treasury_policy: ByteArray =
+  #"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+fn t_treasury_burn() -> assets.Value {
+  assets.from_asset(t_treasury_policy, constants.treasury_info_nft_asset_name, -1)
+}
+
 fn t_retire_tx(old_datum: Data, mint: assets.Value) {
   Transaction {
     ..placeholder,
@@ -513,7 +537,12 @@ fn t_retire_tx(old_datum: Data, mint: assets.Value) {
 
 test retire_happy_path() {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1))
+  let tx =
+    t_retire_tx(
+      old_datum,
+      assets.from_asset(t_own_hash, t_asset_name, -1)
+        |> assets.merge(t_treasury_burn()),
+    )
   t_spend(old_datum, Retire, tx)
 }
 
@@ -521,7 +550,11 @@ test retire_rejects_unauthorized() fail {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
   let tx =
     Transaction {
-      ..t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1)),
+      ..t_retire_tx(
+        old_datum,
+        assets.from_asset(t_own_hash, t_asset_name, -1)
+          |> assets.merge(t_treasury_burn()),
+      ),
       extra_signatories: [],
     }
   t_spend(old_datum, Retire, tx)
@@ -529,13 +562,33 @@ test retire_rejects_unauthorized() fail {
 
 test retire_rejects_wrong_burn_quantity() fail {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -2))
+  let tx =
+    t_retire_tx(
+      old_datum,
+      assets.from_asset(t_own_hash, t_asset_name, -2)
+        |> assets.merge(t_treasury_burn()),
+    )
   t_spend(old_datum, Retire, tx)
 }
 
 test retire_rejects_wrong_asset_name_burn() fail {
   let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
-  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, "other", -1))
+  let tx =
+    t_retire_tx(
+      old_datum,
+      assets.from_asset(t_own_hash, "other", -1)
+        |> assets.merge(t_treasury_burn()),
+    )
+  t_spend(old_datum, Retire, tx)
+}
+
+//spec [CFG-8]: retiring the Config WITHOUT burning the Treasury state NFT is
+//refused. Allowing it strands the Treasury state UTxO forever: treasury.ak's
+//Retire needs a Config-NFT burn that can never happen again, and its other two
+//branches need a Config UTxO that no longer exists.
+test retire_rejects_without_treasury_burn() fail {
+  let old_datum = t_datum_data(Some(CardanoSignature { hash: t_dev_pkh }))
+  let tx = t_retire_tx(old_datum, assets.from_asset(t_own_hash, t_asset_name, -1))
   t_spend(old_datum, Retire, tx)
 }
 

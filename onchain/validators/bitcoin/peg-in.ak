@@ -612,20 +612,30 @@ fn t_recipient() -> Address {
 //readers use positional getters, so the fixture mirrors the wire encoding.
 fn t_config_datum_data() -> Data {
   let update_auth_data: Data = Some(CardanoSignature { hash: #"aadd" })
+  //params (ConfigDatum field 1): schedule, fee_rate_sat_per_vb, per_pegout_fee,
+  //min_peg_out_fbtc, base_ban_duration_ms, max_faults_before_permanent,
+  //max_validity_window_ms, federation_csv_blocks. The schedule slot is a dummy
+  //Int: no validator reads it, and a full ScheduleParams here would freeze its
+  //shape into this fixture for no gain.
   let params_data: Data =
     builtin.constr_data(
       0,
       [
+        builtin.i_data(0),
         builtin.i_data(1),
         builtin.i_data(1000),
         builtin.i_data(10000),
-        builtin.i_data(0),
+        builtin.i_data(600_000),
+        builtin.i_data(3),
+        builtin.i_data(3_600_000),
+        builtin.i_data(144),
       ],
     )
   builtin.constr_data(
     0,
     [
       update_auth_data,
+      params_data,
       builtin.b_data(t_bridged_token_policy),
       builtin.b_data(t_cpi_policy),
       builtin.b_data(t_bridge_state_policy),
@@ -633,16 +643,12 @@ fn t_config_datum_data() -> Data {
       builtin.b_data(#"aa333333333333333333333333333333333333333333333333333333"),
       builtin.b_data(t_peg_in_script_hash),
       builtin.b_data(#"aa555555555555555555555555555555555555555555555555555555"),
-      //Federation identity, indexes 7-13 (spec §Config datum). Off-chain
-      //readers only; no validator in this tree reads a current value.
+      //Federation identity, indexes 8-11 (spec §Config datum).
       builtin.b_data(#"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-      builtin.i_data(600_000),
-      builtin.i_data(3),
-      builtin.i_data(3_600_000),
       builtin.b_data(#"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
       builtin.b_data(#"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
-      builtin.b_data("TMTx"),
-      params_data,
+      //y_federation, spec [UY-5]: read on-chain by treasury.ak only
+      builtin.b_data(#"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
     ],
   )
 }

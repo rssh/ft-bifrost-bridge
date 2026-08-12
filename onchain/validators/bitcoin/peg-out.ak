@@ -260,36 +260,40 @@ fn t_config_datum_data() -> Data {
       final_tm_cutoff: 345600,
       stability_window: 129600,
     }
+  //params (ConfigDatum field 1): schedule, fee_rate_sat_per_vb, per_pegout_fee,
+  //min_peg_out_fbtc, base_ban_duration_ms, max_faults_before_permanent,
+  //max_validity_window_ms, federation_csv_blocks.
   let params_data: Data =
     builtin.constr_data(
       0,
       [
+        schedule_data,
         builtin.i_data(1),
         builtin.i_data(1000),
         builtin.i_data(10000),
-        schedule_data,
+        builtin.i_data(600_000),
+        builtin.i_data(3),
+        builtin.i_data(3_600_000),
+        builtin.i_data(144),
       ],
     )
   builtin.constr_data(
     0,
     [
       update_auth_data,
+      params_data,
       builtin.b_data(t_bridged_token_policy),
       builtin.b_data(#"aa222222222222222222222222222222222222222222222222222222"),
       builtin.b_data(t_bridge_state_policy),
       builtin.b_data(#"aa333333333333333333333333333333333333333333333333333333"),
       builtin.b_data(#"aa444444444444444444444444444444444444444444444444444444"),
       builtin.b_data(t_peg_out_script_hash),
-      //Federation identity, indexes 7-13 (spec §Config datum). Off-chain
-      //readers only; no validator in this tree reads a current value.
+      //Federation identity, indexes 8-11 (spec §Config datum).
       builtin.b_data(#"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-      builtin.i_data(600_000),
-      builtin.i_data(3),
-      builtin.i_data(3_600_000),
       builtin.b_data(#"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
       builtin.b_data(#"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
-      builtin.b_data("TMTx"),
-      params_data,
+      //y_federation, spec [UY-5]: read on-chain by treasury.ak only
+      builtin.b_data(#"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
     ],
   )
 }

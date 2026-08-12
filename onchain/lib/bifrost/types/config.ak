@@ -1,38 +1,45 @@
 use aiken/builtin
 use bifrost/types/general.{AuthorizationMethod, CardanoSignature}
 use bifrost/utils.{safe_list_at}
-use cardano/assets.{AssetName, PolicyId}
+use cardano/assets.{PolicyId}
 
 pub type ConfigSpendRedeemer {
   Update
   Retire
 }
 
-//The rev-5.4 fifteen-field Config datum (spec §Config datum). update_auth
-//comes first, because it is the field that governs every other one.
+//The rev-5.5 twelve-field Config datum (spec §Config datum). update_auth comes
+//first, because it is the field that governs every other one.
 //
-//`params` comes LAST, and deliberately. Every field before it is a scalar at a
-//frozen index; a nested record in the middle would have to be renumbered past
-//each time the datum grows. Appending after `params` instead of before it also
-//keeps the [LIB-3] append rule honest — the record never moves, so no reader
-//that already found it has to be rebuilt.
+//Two rules decide where a field goes.
 //
-//Removed from the rev-5.1 layout (spec §Config datum, "Rev 5.1's fields ...
-//are all GONE"):
-//- bridged_token_asset_name: now the [CFG-1] constant "fSAT" in
-//  bifrost/constants.
+//spec [CFG-6]: an identity or a key is a TOP-LEVEL field; a tunable number
+//lives inside `params`. That is why `y_federation` (a key) sits at index 11
+//while `federation_csv_blocks` (a block count) sits inside `params`.
+//
+//spec [CFG-5]: a new field is APPENDED at the tail, never inserted, and
+//`params` sits at index 1 and never moves. The rev-5.4 layout put `params`
+//last and told the reader to append after it, which invites exactly the edit
+//that breaks every index: insert before `params` to keep it last. At index 1
+//there is no "last" property left to preserve.
+//
+//Removed in rev 5.5:
+//- treasury_info_asset_name: the Treasury state NFT name is the "BFRTRY"
+//  constant in bifrost/constants, so the field had nothing left to say.
+//
+//Removed earlier, from the rev-5.1 layout:
+//- bridged_token_asset_name: now the [CFG-1] constant "fSAT".
 //- peg_in_close_verifier_script_hash: the SPI trie removes the close
 //  verifier for good; both close reasons become MPF proofs in peg-in.ak.
-//- both legit_treasury_movement_* hashes: vestigial, dummy on the deployed
-//  instance.
-//- min_stake: it was off-chain-only (the heimdall R2 registration gate had
-//  no on-chain reader), so it leaves the datum with the other unread fields.
+//- both legit_treasury_movement_* hashes: vestigial.
+//- min_stake, leader_reward: no on-chain reader.
 //- initial_btc_treasury_utxo: [BSS-4] takes the anchor from the bootstrap
 //  redeemer.
-//- leader_reward: no on-chain reader in this tree.
 pub type ConfigDatum {
   //Authority allowed to Update/Retire the config UTxO. None = frozen.
   update_auth: Option<AuthorizationMethod>,
+  //Every value with no on-chain reader. Index 1, and frozen there.
+  params: ConfigParams,
   //fBTC policy id
   bridged_token_policy: PolicyId,
   //CPI trie NFT policy
@@ -46,46 +53,36 @@ pub type ConfigDatum {
   tm_script_hash: ByteArray,
   peg_in_script_hash: ByteArray,
   peg_out_script_hash: ByteArray,
-  //-- Federation identity (ban policy + SPO registry). Off-chain readers only,
-  //-- like the params below; no Aiken validator reads a current value here.
-  //--
-  //-- Published rather than derived, and that is the whole point. Every value
-  //-- an SPO would otherwise hand-copy to locate these is an INPUT to the
-  //-- policy id it identifies, so no node can derive the address it would read
-  //-- them from — and one wrong input yields a well-formed address holding
-  //-- NOTHING rather than an error. Since the eligible DKG roster is the
-  //-- registry MINUS active bans, either half of that silently splits the
-  //-- roster with nothing in any node's log.
+  //-- Federation identity. Published rather than derived, and that is the whole
+  //-- point. Every value an SPO would otherwise hand-copy to locate these is an
+  //-- INPUT to the policy id it identifies, so no node can derive the address
+  //-- it would read them from — and one wrong input yields a well-formed
+  //-- address holding NOTHING rather than an error. Since the eligible DKG
+  //-- roster is the registry MINUS active bans, either half of that silently
+  //-- splits the roster with nothing in any node's log.
   //The DEPLOYED spo_bans policy id; the ban script address follows from it.
   spo_bans_policy_id: PolicyId,
-  //Ban schedule, mirroring what spo_bans was parameterized with. Read by the
-  //ApplyBan builder, which computes a ban's end time from the first two and
-  //bounds its validity interval by the third. Already baked into the id above;
-  //publishing them means they are read rather than typed.
-  base_ban_duration_ms: Int,
-  max_faults_before_permanent: Int,
-  max_validity_window_ms: Int,
-  //The DEPLOYED spos_registry policy id; the registry address follows from it.
+  //The DEPLOYED spos_registry policy id. spec [PRE-4]: treasury.ak reads this
+  //to gate its RegistryUpdate branch, so this field has an on-chain reader for
+  //the first time. treasury.ak cannot take it as a parameter without
+  //recreating the dependency cycle that made the registry-side pin impossible.
   spos_registry_policy_id: PolicyId,
-  //The DEPLOYED treasury_info policy id. Worth publishing even though it is a
-  //pure function of the spos_registry policy alone (rev 5.4 dropped
-  //treasury_info's TM-NFT-policy parameter with the FederationReset branch
-  //that was its only reader): a reader must still apply that parameter to the
-  //same blueprint, and drift yields a different hash, a different address and
-  //an unfindable state UTxO rather than an error.
+  //The DEPLOYED treasury_info policy id. Off-chain discovery only: the pin is a
+  //compile parameter of spos_registry, not this field.
   treasury_info_policy_id: PolicyId,
-  //Asset name of the treasury_info state NFT. Unlike every other field here it
-  //is derivable from nothing at all — a name chosen at bootstrap — so
-  //publishing it is the only way an SPO can avoid typing it.
-  treasury_info_asset_name: AssetName,
-  //Operational parameters, one nested record so governance can replace it
-  //wholesale without renumbering its neighbours. Last field; see the note
-  //above the record.
-  params: ConfigParams,
+  //The federation fallback key (script-leaf key of both Taproot trees). Moved
+  //here from TreasuryDatum in rev 5.5: nothing rotated it there, and here an
+  //ordinary Config Update rotates it, which is the federation-key rotation the
+  //field-permission matrix always promised. spec [UY-5] reads it on-chain.
+  y_federation: ByteArray,
 }
 
-//The tunable operational parameters (spec §Operational parameters).
+//Every value with no on-chain reader (spec [CFG-6]). Governance replaces the
+//record wholesale. `schedule` sits at index 0 and never moves, for the same
+//reason `params` sits at index 1.
 pub type ConfigParams {
+  //Epoch/TM schedule.
+  schedule: ScheduleParams,
   //Exact miner fee rate (sat/vB) for deterministic TM construction.
   fee_rate_sat_per_vb: Int,
   //Floor (satoshi) for the per-peg-out protocol fee; the effective fee pins
@@ -93,8 +90,15 @@ pub type ConfigParams {
   per_pegout_fee: Int,
   //Minimum bridged-token amount (satoshi) a PegOut may lock.
   min_peg_out_fbtc: Int,
-  //Epoch/TM schedule. Off-chain readers only.
-  schedule: ScheduleParams,
+  //Ban schedule, mirroring what spo_bans was parameterized with. Read by the
+  //ApplyBan builder, which computes a ban's end time from the first two and
+  //bounds its validity interval by the third.
+  base_ban_duration_ms: Int,
+  max_faults_before_permanent: Int,
+  max_validity_window_ms: Int,
+  //The CSV timeout baked into the federation Taproot leaves. A block count, so
+  //[CFG-6] puts it here and not next to y_federation.
+  federation_csv_blocks: Int,
 }
 
 //The tunable protocol schedule, E-relative slot values (spec §TM batches and
@@ -143,77 +147,56 @@ pub fn get_update_auth(
   update_auth
 }
 
-pub fn get_bridged_token_policy(config_fields: List<Data>) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 1))
+//The nested params record (ConfigDatum field 1) as its raw fields list.
+//Indexes inside it live only in the getters below.
+fn get_params_fields(config_fields: List<Data>) -> List<Data> {
+  builtin.unconstr_fields(safe_list_at(config_fields, 1))
 }
 
-pub fn get_completed_peg_ins_policy(config_fields: List<Data>) -> PolicyId {
+pub fn get_bridged_token_policy(config_fields: List<Data>) -> PolicyId {
   builtin.un_b_data(safe_list_at(config_fields, 2))
 }
 
-pub fn get_bridge_state_policy(config_fields: List<Data>) -> PolicyId {
+pub fn get_completed_peg_ins_policy(config_fields: List<Data>) -> PolicyId {
   builtin.un_b_data(safe_list_at(config_fields, 3))
 }
 
-//spec [CFG-2]: NO on-chain reader. Off-chain/test use only; it exists so the
-//config_getters_match_datum_fields test pins index 4, and so an off-chain
-//Aiken consumer never hard-codes the index.
-pub fn get_tm_script_hash(config_fields: List<Data>) -> ByteArray {
+pub fn get_bridge_state_policy(config_fields: List<Data>) -> PolicyId {
   builtin.un_b_data(safe_list_at(config_fields, 4))
 }
 
-pub fn get_peg_in_script_hash(config_fields: List<Data>) -> ByteArray {
+//spec [CFG-2]: NO on-chain reader. Off-chain/test use only; it exists so the
+//config_getters_match_datum_fields test pins index 5, and so an off-chain
+//Aiken consumer never hard-codes the index.
+pub fn get_tm_script_hash(config_fields: List<Data>) -> ByteArray {
   builtin.un_b_data(safe_list_at(config_fields, 5))
 }
 
-pub fn get_peg_out_script_hash(config_fields: List<Data>) -> ByteArray {
+pub fn get_peg_in_script_hash(config_fields: List<Data>) -> ByteArray {
   builtin.un_b_data(safe_list_at(config_fields, 6))
 }
 
-pub fn get_spo_bans_policy_id(config_fields: List<Data>) -> PolicyId {
+pub fn get_peg_out_script_hash(config_fields: List<Data>) -> ByteArray {
   builtin.un_b_data(safe_list_at(config_fields, 7))
 }
 
-pub fn get_base_ban_duration_ms(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 8))
+pub fn get_spo_bans_policy_id(config_fields: List<Data>) -> PolicyId {
+  builtin.un_b_data(safe_list_at(config_fields, 8))
 }
 
-pub fn get_max_faults_before_permanent(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 9))
-}
-
-pub fn get_max_validity_window_ms(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(config_fields, 10))
-}
-
+//spec [PRE-4]: read on-chain by treasury.ak's RegistryUpdate branch.
 pub fn get_spos_registry_policy_id(config_fields: List<Data>) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 11))
+  builtin.un_b_data(safe_list_at(config_fields, 9))
 }
 
 pub fn get_treasury_info_policy_id(config_fields: List<Data>) -> PolicyId {
-  builtin.un_b_data(safe_list_at(config_fields, 12))
+  builtin.un_b_data(safe_list_at(config_fields, 10))
 }
 
-pub fn get_treasury_info_asset_name(config_fields: List<Data>) -> AssetName {
-  builtin.un_b_data(safe_list_at(config_fields, 13))
-}
-
-//The nested params record (ConfigDatum field 14, the last one) as its raw
-//fields list. Indexes inside it live only in the getters below.
-fn get_params_fields(config_fields: List<Data>) -> List<Data> {
-  builtin.unconstr_fields(safe_list_at(config_fields, 14))
-}
-
-pub fn get_fee_rate_sat_per_vb(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 0))
-}
-
-pub fn get_per_pegout_fee(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 1))
-}
-
-pub fn get_min_peg_out_fbtc(config_fields: List<Data>) -> Int {
-  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 2))
+//spec [UY-5]: read on-chain by treasury.ak's UpdateY branch, which accepts a
+//BIP340 signature under this key as the federation's standing co-authority.
+pub fn get_y_federation(config_fields: List<Data>) -> ByteArray {
+  builtin.un_b_data(safe_list_at(config_fields, 11))
 }
 
 //Off-chain/test use only. Unlike the other getters this is a FULL cast of
@@ -222,8 +205,36 @@ pub fn get_min_peg_out_fbtc(config_fields: List<Data>) -> Int {
 //validator reads the schedule; keep it that way.
 pub fn get_schedule(config_fields: List<Data>) -> ScheduleParams {
   expect schedule: ScheduleParams =
-    safe_list_at(get_params_fields(config_fields), 3)
+    safe_list_at(get_params_fields(config_fields), 0)
   schedule
+}
+
+pub fn get_fee_rate_sat_per_vb(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 1))
+}
+
+pub fn get_per_pegout_fee(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 2))
+}
+
+pub fn get_min_peg_out_fbtc(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 3))
+}
+
+pub fn get_base_ban_duration_ms(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 4))
+}
+
+pub fn get_max_faults_before_permanent(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 5))
+}
+
+pub fn get_max_validity_window_ms(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 6))
+}
+
+pub fn get_federation_csv_blocks(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 7))
 }
 
 //Pins every getter index to its ConfigDatum record field. The fixture is a
@@ -248,64 +259,63 @@ test config_getters_match_datum_fields() {
     }
   let params =
     ConfigParams {
-      fee_rate_sat_per_vb: 12,
-      per_pegout_fee: 13,
-      min_peg_out_fbtc: 14,
       schedule,
+      fee_rate_sat_per_vb: 21,
+      per_pegout_fee: 22,
+      min_peg_out_fbtc: 23,
+      base_ban_duration_ms: 24,
+      max_faults_before_permanent: 25,
+      max_validity_window_ms: 26,
+      federation_csv_blocks: 27,
     }
   let datum =
     ConfigDatum {
-      update_auth: Some(CardanoSignature { hash: #"aa10" }),
-      bridged_token_policy: #"aa01",
-      completed_peg_ins_policy: #"aa02",
-      bridge_state_policy: #"aa03",
-      tm_script_hash: #"aa04",
-      peg_in_script_hash: #"aa05",
-      peg_out_script_hash: #"aa06",
-      spo_bans_policy_id: #"aa07",
-      base_ban_duration_ms: 8,
-      max_faults_before_permanent: 9,
-      max_validity_window_ms: 10,
-      spos_registry_policy_id: #"aa11",
-      treasury_info_policy_id: #"aa12",
-      treasury_info_asset_name: "aa13",
+      update_auth: Some(CardanoSignature { hash: #"aa00" }),
       params,
+      bridged_token_policy: #"aa02",
+      completed_peg_ins_policy: #"aa03",
+      bridge_state_policy: #"aa04",
+      tm_script_hash: #"aa05",
+      peg_in_script_hash: #"aa06",
+      peg_out_script_hash: #"aa07",
+      spo_bans_policy_id: #"aa08",
+      spos_registry_policy_id: #"aa09",
+      treasury_info_policy_id: #"aa10",
+      y_federation: #"aa11",
     }
   let datum_data: Data = datum
   let fields = builtin.unconstr_fields(datum_data)
   and {
     //index 0
     get_update_auth(fields) == datum.update_auth,
-    //index 1
-    get_bridged_token_policy(fields) == datum.bridged_token_policy,
     //index 2
-    get_completed_peg_ins_policy(fields) == datum.completed_peg_ins_policy,
+    get_bridged_token_policy(fields) == datum.bridged_token_policy,
     //index 3
+    get_completed_peg_ins_policy(fields) == datum.completed_peg_ins_policy,
+    //index 4
     get_bridge_state_policy(fields) == datum.bridge_state_policy,
-    //index 4, spec [CFG-2]
+    //index 5, spec [CFG-2]
     get_tm_script_hash(fields) == datum.tm_script_hash,
-    //index 5
-    get_peg_in_script_hash(fields) == datum.peg_in_script_hash,
     //index 6
-    get_peg_out_script_hash(fields) == datum.peg_out_script_hash,
+    get_peg_in_script_hash(fields) == datum.peg_in_script_hash,
     //index 7
-    get_spo_bans_policy_id(fields) == datum.spo_bans_policy_id,
+    get_peg_out_script_hash(fields) == datum.peg_out_script_hash,
     //index 8
-    get_base_ban_duration_ms(fields) == datum.base_ban_duration_ms,
-    //index 9
-    get_max_faults_before_permanent(fields) == datum.max_faults_before_permanent,
-    //index 10
-    get_max_validity_window_ms(fields) == datum.max_validity_window_ms,
-    //index 11
+    get_spo_bans_policy_id(fields) == datum.spo_bans_policy_id,
+    //index 9, spec [PRE-4]
     get_spos_registry_policy_id(fields) == datum.spos_registry_policy_id,
-    //index 12
+    //index 10
     get_treasury_info_policy_id(fields) == datum.treasury_info_policy_id,
-    //index 13
-    get_treasury_info_asset_name(fields) == datum.treasury_info_asset_name,
-    //index 14, nested params record
+    //index 11, spec [UY-5]
+    get_y_federation(fields) == datum.y_federation,
+    //index 1, the nested params record
+    get_schedule(fields) == params.schedule,
     get_fee_rate_sat_per_vb(fields) == params.fee_rate_sat_per_vb,
     get_per_pegout_fee(fields) == params.per_pegout_fee,
     get_min_peg_out_fbtc(fields) == params.min_peg_out_fbtc,
-    get_schedule(fields) == params.schedule,
+    get_base_ban_duration_ms(fields) == params.base_ban_duration_ms,
+    get_max_faults_before_permanent(fields) == params.max_faults_before_permanent,
+    get_max_validity_window_ms(fields) == params.max_validity_window_ms,
+    get_federation_csv_blocks(fields) == params.federation_csv_blocks,
   }
 }

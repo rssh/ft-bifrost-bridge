@@ -3,7 +3,7 @@
 Date: 2026-08-12, rev 5.5. Status: proposed, pending approval.
 
 This revision rebuilds `treasury.ak` and fixes the way `spos-registry.ak` finds
-the Treasury state UTxO. It makes six changes:
+the Treasury state UTxO. It makes seven changes:
 
 1. `treasury_info` is parameterized by a one-shot outpoint, so its NFT is a
    singleton by construction.
@@ -15,6 +15,8 @@ the Treasury state UTxO. It makes six changes:
    `federation_csv_blocks` move to the Config datum.
 6. `spos-registry.ak` authenticates the Treasury state UTxO by NFT, which it
    does not do today.
+7. The Config NFT asset name becomes the constant `"BIFCFG"`, and no validator
+   takes it as a parameter any more.
 
 **This design assumes a FRESH DEPLOYMENT.** Nothing on preprod is preserved.
 The Config datum is re-indexed and every validator gets a new hash, including
@@ -113,12 +115,7 @@ Two spec statements are currently false:
 `treasury.ak` MUST declare:
 
 ```aiken
-validator treasury_info(
-  tx0: ByteArray,
-  index0: Int,
-  config_policy_id: PolicyId,
-  config_asset_name: AssetName,
-)
+validator treasury_info(tx0: ByteArray, index0: Int, config_policy_id: PolicyId)
 ```
 
 `lib/bifrost/constants.ak` MUST define `treasury_info_nft_asset_name` as
@@ -128,26 +125,27 @@ validator treasury_info(
   NOT take `registry_policy_id` either. The original rationale stands: a
   compile parameter naming another bridge script breaks permanently on that
   script's redeploy, and this script's state UTxO can never move.
-* **[PRE-3]** NEW. `treasury.ak` MUST take the Config NFT policy id and asset
-  name as parameters. The Config identity is chosen at bootstrap and never
-  changes, so it is the one identity safe to bake in.
+* **[PRE-3]** NEW. `treasury.ak` MUST take the Config NFT policy id as a
+  parameter. The Config identity is chosen at bootstrap and never changes, so
+  it is the one identity safe to bake in.
 * **[PRE-4]** NEW. `treasury.ak` MUST read `spos_registry_policy_id` from the
   Config datum, not from a parameter.
 
 > **Why the Config identity is safe to bake in but the registry's is not.** The
 > Config UTxO is the root of the identity graph. Its policy id depends only on
-> its own one-shot outpoint and asset name. Every other identity in the bridge
-> is published inside its datum and is therefore replaceable by governance.
+> its own one-shot outpoint, and after [CFG-7] its asset name is a constant.
+> Every other identity in the bridge is published inside its datum and is
+> therefore replaceable by governance.
 
 ### D2. The dependency cycle breaks
 
 Deployment order becomes a chain with no cycle:
 
 ```
-choose Config one-shot outpoint + asset name
+choose Config one-shot outpoint          (name is the "BIFCFG" constant)
         |
         v
-  config policy id  ------> treasury_info(tx0, index0, config_policy, config_name)
+  config policy id  ------> treasury_info(tx0, index0, config_policy_id)
                                     |
                                     v
                             treasury policy id ---> spo_registry(btx, bidx, treasury_policy_id)
@@ -200,8 +198,8 @@ pub type TreasurySpendRedeemer {
 > that finds nothing silently picks a wrong UTxO instead of failing. `peg-in.ak`
 > already states this rule for the bridge state singleton.
 
-`Retire` carries no index. It checks a burn by policy id and asset name, and
-both are parameters.
+`Retire` carries no index. It checks a burn by the parameterized Config policy
+id and the `"BIFCFG"` constant, so it needs no Config datum read.
 
 `rotation_sig_msg` is unchanged. The signed message stays
 `sha2_256(tag ++ txid ++ vout LE(4) ++ epoch BE(8) ++ new_key)`, so the existing
@@ -246,6 +244,25 @@ Tunable numbers move into `params`.
   NOT be inserted. `params` sits at index 1 and MUST NOT move.
 * **[CFG-6]** NEW. An identity or a key MUST be a top-level field. A tunable
   number MUST live inside `params`.
+* **[CFG-7]** NEW. The Config NFT asset name is the protocol constant
+  `"BIFCFG"`, defined in `lib/bifrost/constants.ak`. No validator MAY take it
+  as a parameter. `config.ak`, `peg-in.ak`, `peg-out.ak`, `bridged-token.ak`
+  and `completed-peg-ins-merkle-tree.ak` MUST drop the parameter and read the
+  constant.
+
+> **Why the name must be a constant everywhere, not just in `treasury.ak`.** A
+> constant in one script and a parameter in five others is a divergence waiting
+> to happen. If a deployment passes any other name, `treasury.ak` looks for a
+> token that does not exist. Every branch then fails, including `Retire`, whose
+> Config-burn check names the same constant. The Treasury state UTxO would be
+> unspendable forever, with no recovery path. One definition removes the class.
+
+> **Why a constant name does not prevent two instances.** The Config policy id
+> is the hash of `config.ak` applied to its own one-shot outpoint, so two
+> instances on one network still have distinct Config NFTs. The name was never
+> what separated them. This follows the same conversion [CFG-1] made for
+> `"fSAT"`, and the `fsat-config-tx-migration.md` deployment made for `"CPI"`
+> and `"CPO"`.
 
 > **Why `params` moves to index 1.** Under the append rule every index is
 > frozen, so `params` at the tail never moves either. The problem is the
@@ -356,7 +373,8 @@ implements.
 ### Treasury spend, `Retire`
 
 * **[TSY-19]** NEW. `treasury.ak` MUST verify that the transaction burns exactly
-  one Config NFT, identified by the parameterized policy id and asset name.
+  one Config NFT, identified by the parameterized policy id and the `"BIFCFG"`
+  constant.
 * **[TSY-20]** NEW. `treasury.ak` MUST verify that the transaction burns exactly
   one Treasury state NFT.
 * **[TSY-21]** NEW. `treasury.ak` MUST NOT require a continuing output on this
@@ -413,9 +431,9 @@ the host chain's trust floor.
 | `validators/bitcoin/spos-registry.ak` | New `treasury_policy_id` parameter. [REG-6] to [REG-8] and [DRG-5]. |
 | `lib/bifrost/types/treasury.ak` | `TreasuryDatum` drops to two fields. `TreasuryMintRedeemer` deleted. `Retire` added. |
 | `lib/bifrost/types/config.ak` | Re-indexed record, re-indexed getters, `get_y_federation` and `get_federation_csv_blocks` added, `get_treasury_info_asset_name` deleted. |
-| `lib/bifrost/constants.ak` | `treasury_info_nft_asset_name` becomes `"BFRTRY"`. |
-| `validators/bitcoin/config.ak` | Test fixture `t_datum_data` rebuilt for the new layout. |
-| `peg-in.ak`, `peg-out.ak`, `bridged-token.ak`, `completed-peg-ins-merkle-tree.ak` | No code change beyond the index-map comments. All four get a new hash, because the getters they call moved. |
+| `lib/bifrost/constants.ak` | `treasury_info_nft_asset_name` becomes `"BFRTRY"`. `config_nft_asset_name` added as `"BIFCFG"`. |
+| `validators/bitcoin/config.ak` | Drops the `config_asset_name` parameter per [CFG-7]. Test fixture `t_datum_data` rebuilt for the new layout. |
+| `peg-in.ak`, `peg-out.ak`, `bridged-token.ak`, `completed-peg-ins-merkle-tree.ak` | Each drops its config-NFT asset-name parameter per [CFG-7]. Otherwise only the index-map comments change. All four get a new hash, because the getters they call moved. |
 
 The index-map comments at `config.ak:163`, `peg-out.ak:242` and
 `bridged-token.ak:89` MUST be updated.
@@ -432,7 +450,7 @@ submodule checkout.
 | `src/cardano/treasury_info.rs` | Locate the UTxO by the `"BFRTRY"` constant, not a Config field. |
 | `src/cardano/update_y.rs` | Read `y_federation` from the Config datum. Add `config_ref_input_index` to the redeemer. |
 | `src/cardano/register_spo.rs` | Unchanged logic. The treasury input it already builds must now satisfy [REG-6] to [REG-8]. |
-| `src/cardano/blueprint.rs` | New parameter lists for `treasury_info` and `spos_registry`. |
+| `src/cardano/blueprint.rs` | New parameter lists for `treasury_info` and `spos_registry`. The config-NFT asset-name argument is dropped from `config`, `peg_in`, `peg_out`, `bridged_token` and `completed_peg_ins_merkle_tree` per [CFG-7]. |
 | `src/cardano/config_params.rs` | New Config field indexes. |
 | `src/cardano/roster.rs`, `src/bitcoin/taproot.rs`, `src/epoch/*` | Take `y_federation` and `federation_csv_blocks` from the Config datum. |
 | `src/main.rs:2578` | Delete the [PRE-2] warning. The on-chain change ships here. |
@@ -500,6 +518,12 @@ Aiken tests, in `treasury.ak` unless noted.
 29. `config_getters_match_datum_fields` extended to pin all 12 top-level indexes
     and all 8 `params` indexes.
 
+**`validators/bitcoin/config.ak`**
+
+30. The existing mint and spend tests pass with the `"BIFCFG"` constant in place
+    of the `t_asset_name` parameter. The fixture constant is deleted, not
+    renamed, so a leftover parameter fails to compile.
+
 The existing BIP340 vectors `t_updatey_sig` and `t_updatey_fed_sig` are reused
 unchanged, because `rotation_sig_msg` does not change.
 
@@ -507,9 +531,10 @@ unchanged, because `rotation_sig_msg` does not change.
 
 Order:
 
-1. Choose the Config one-shot outpoint and asset name.
+1. Choose the Config one-shot outpoint. The asset name is the `"BIFCFG"`
+   constant and is not a deployment choice.
 2. Build `config.ak`. Record the policy id.
-3. Build `treasury.ak` with the Config identity and its own one-shot outpoint.
+3. Build `treasury.ak` with the Config policy id and its own one-shot outpoint.
    Record the policy id.
 4. Build `spos_registry` with the treasury policy id. Record the policy id.
 5. Build every remaining validator.
@@ -523,11 +548,15 @@ the Config UTxO, so no ordering constraint exists between them.
 
 1. `lib/bifrost/constants.ak`, `lib/bifrost/types/treasury.ak`,
    `lib/bifrost/types/config.ak`.
-2. `validators/bitcoin/config.ak` test fixture.
-3. `validators/bitcoin/treasury.ak` and its tests.
-4. `validators/bitcoin/spos-registry.ak` and its tests.
-5. `documentation/technical_documentation.md`.
-6. heimdall, in its own repository and its own commit.
+2. `validators/bitcoin/config.ak`: drop the asset-name parameter, rebuild the
+   test fixture.
+3. `peg-in.ak`, `peg-out.ak`, `bridged-token.ak` and
+   `completed-peg-ins-merkle-tree.ak`: drop the asset-name parameter, update the
+   index-map comments.
+4. `validators/bitcoin/treasury.ak` and its tests.
+5. `validators/bitcoin/spos-registry.ak` and its tests.
+6. `documentation/technical_documentation.md`.
+7. heimdall, in its own repository and its own commit.
 
-Steps 1 to 4 share a working tree and must land together. The suite must be
+Steps 1 to 5 share a working tree and must land together. The suite must be
 green before the commit.

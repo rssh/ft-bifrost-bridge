@@ -1,6 +1,7 @@
 use aiken/builtin
 use aiken/collection/list
 use bifrost/authorizer
+use bifrost/constants
 use bifrost/types/config.{
   ConfigDatum, ConfigSpendRedeemer, Retire, ScheduleParams, Update,
 } as configType
@@ -17,7 +18,11 @@ use cardano/transaction.{
 }
 
 //Contains all SC params
-validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
+//spec [CFG-7]: the asset name is the protocol constant "BIFCFG", not a
+//parameter. Five validators took it as one; a single divergent deployment
+//argument then left treasury.ak searching for a token that does not exist, and
+//its Retire branch with it, so the Treasury state UTxO could never be spent.
+validator config(tx0: ByteArray, index0: Int) {
   mint(_redeemer: Redeemer, policy_id: PolicyId, self: Transaction) {
     let own_policy_mint = quantity_of_policy_id(self.mint, policy_id)
     if own_policy_mint > 0 {
@@ -39,9 +44,9 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
         //Only 1 token of same policy
         own_policy_mint == 1,
         //I am minting only 1 token (NFT)
-        quantity_of(self.mint, policy_id, config_asset_name) == 1,
+        quantity_of(self.mint, policy_id, constants.config_nft_asset_name) == 1,
         //NFT goes to the output
-        quantity_of(output_parameters.value, policy_id, config_asset_name) == 1,
+        quantity_of(output_parameters.value, policy_id, constants.config_nft_asset_name) == 1,
       }
     } else {
       //Retire: burn exactly the config NFT. No authorization here: the NFT
@@ -50,7 +55,7 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
       //authorization.
       and {
         own_policy_mint == -1,
-        quantity_of(self.mint, policy_id, config_asset_name) == -1,
+        quantity_of(self.mint, policy_id, constants.config_nft_asset_name) == -1,
       }
     }
   }
@@ -112,7 +117,7 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
             own_input.output.value,
           ),
           //The config NFT continues, and is the only own-policy token
-          quantity_of(config_output.value, own_hash, config_asset_name) == 1,
+          quantity_of(config_output.value, own_hash, constants.config_nft_asset_name) == 1,
           quantity_of_policy_id(config_output.value, own_hash) == 1,
         }
       }
@@ -122,7 +127,7 @@ validator config(tx0: ByteArray, index0: Int, config_asset_name: ByteArray) {
         and {
           authorized,
           quantity_of_policy_id(self.mint, own_hash) == -1,
-          quantity_of(self.mint, own_hash, config_asset_name) == -1,
+          quantity_of(self.mint, own_hash, constants.config_nft_asset_name) == -1,
         }
     }
   }
@@ -141,7 +146,8 @@ const t_tx0: ByteArray =
 
 const t_index0: Int = 0
 
-const t_asset_name: ByteArray = "BifrostConfig"
+//Alias for the [CFG-7] constant, kept so the fixtures below read as they did.
+const t_asset_name: ByteArray = constants.config_nft_asset_name
 
 const t_own_hash: ByteArray =
   #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -270,7 +276,6 @@ fn t_spend(
   config.spend(
     t_tx0,
     t_index0,
-    t_asset_name,
     Some(old_datum_data),
     redeemer,
     t_own_ref,
@@ -563,7 +568,7 @@ test mint_bootstrap_happy_path() {
       outputs: [t_config_output(datum)],
       mint: assets.from_asset(t_own_hash, t_asset_name, 1),
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 
 test mint_bootstrap_rejects_bad_datum() fail {
@@ -579,7 +584,7 @@ test mint_bootstrap_rejects_bad_datum() fail {
       outputs: [bad_datum_output],
       mint: assets.from_asset(t_own_hash, t_asset_name, 1),
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 
 test mint_burn_accepts_minus_one() {
@@ -590,7 +595,7 @@ test mint_burn_accepts_minus_one() {
       mint: assets.from_asset(t_own_hash, t_asset_name, -1),
       extra_signatories: [t_dev_pkh],
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 
 test mint_burn_rejects_wrong_asset_name() fail {
@@ -599,7 +604,7 @@ test mint_burn_rejects_wrong_asset_name() fail {
       ..placeholder,
       mint: assets.from_asset(t_own_hash, "other", -1),
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 
 test mint_burn_rejects_mixed_mint_and_burn() fail {
@@ -609,6 +614,6 @@ test mint_burn_rejects_mixed_mint_and_burn() fail {
       mint: assets.from_asset(t_own_hash, t_asset_name, -1)
         |> assets.add(t_own_hash, "other", 1),
     }
-  config.mint(t_tx0, t_index0, t_asset_name, Void, t_own_hash, tx)
+  config.mint(t_tx0, t_index0, Void, t_own_hash, tx)
 }
 

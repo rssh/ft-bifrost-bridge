@@ -23,10 +23,7 @@ pub type MintRedeemer {
 //amount on every action (peg completion pins it; Close and Cancel forbid it).
 //This policy adds the single-asset-name guard and the config[1]==policy_id
 //anchor.
-validator bridged_token(
-  configNFTPolicyId: ByteArray,
-  configNFTAssetName: ByteArray,
-) {
+validator bridged_token(configNFTPolicyId: ByteArray) {
   mint(redeemer: MintRedeemer, policy_id: PolicyId, self: Transaction) {
     let config_fields =
       utils.get_config_as_data_list(
@@ -35,7 +32,7 @@ validator bridged_token(
           redeemer.config_ref_input_index,
         ),
         configNFTPolicyId,
-        configNFTAssetName,
+        constants.config_nft_asset_name,
       )
     //Anchor: the peg validators constrain the mint of config[1]; it must be us.
     expect config.get_bridged_token_policy(config_fields) == policy_id
@@ -70,7 +67,9 @@ validator bridged_token(
 const t_config_policy: ByteArray =
   #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
-const t_config_asset: ByteArray = "BifrostConfig"
+//Alias for the [CFG-7] constant; the ref-input fixture must carry the real
+//Config NFT name or get_config_as_data_list rejects it.
+const t_config_asset: ByteArray = constants.config_nft_asset_name
 
 const t_own_policy: ByteArray =
   #"aa111111111111111111111111111111111111111111111111111111"
@@ -169,7 +168,6 @@ fn t_config_ref_input() -> Input {
 fn t_mint(policy_id: ByteArray, tx: Transaction) {
   bridged_token.mint(
     t_config_policy,
-    t_config_asset,
     MintRedeemer { config_ref_input_index: 0 },
     policy_id,
     tx,

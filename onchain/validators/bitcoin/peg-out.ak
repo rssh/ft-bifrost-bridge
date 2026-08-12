@@ -27,7 +27,6 @@ pub const peg_out_cancel_timeout_ms: Int = 2_592_000_000
 
 validator peg_out_validator(
   config_nft_policy_id: ByteArray,
-  config_nft_asset_name: ByteArray,
 ) {
   withdraw(
     redeemer: PegOutWithdrawRedeemer,
@@ -37,7 +36,7 @@ validator peg_out_validator(
     let config_fields = utils.get_config_as_data_list(
       utils.safe_list_at(self.reference_inputs, redeemer.config_ref_input_index),
       config_nft_policy_id,
-      config_nft_asset_name,
+      constants.config_nft_asset_name,
     )
     let bridged_token_policy_id = config.get_bridged_token_policy(
       config_fields,
@@ -210,7 +209,9 @@ validator peg_out_validator(
 const t_config_policy: ByteArray =
   #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
-const t_config_asset: ByteArray = "BifrostConfig"
+//Alias for the [CFG-7] constant; the ref-input fixture must carry the real
+//Config NFT name or get_config_as_data_list rejects it.
+const t_config_asset: ByteArray = constants.config_nft_asset_name
 
 const t_peg_out_script_hash: ByteArray =
   #"aa555555555555555555555555555555555555555555555555555555"
@@ -444,7 +445,6 @@ fn t_withdraw(
   }
   peg_out_validator.withdraw(
     t_config_policy,
-    t_config_asset,
     PegOutWithdrawRedeemer {
       config_ref_input_index: 0,
       completed_peg_outs_ref_input_index: 1,

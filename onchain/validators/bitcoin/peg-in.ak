@@ -95,7 +95,6 @@ fn read_bridge_state(
 validator peg_in_validator(
   oracle_policy_id: PolicyId,
   config_nft_policy_id: PolicyId,
-  config_nft_asset_name: AssetName,
 ) {
   mint(redeemer: PegInMintRedeemer, policy_id: PolicyId, self: Transaction) {
     let input_ref_hash = utils.hash_output_ref(redeemer.input_ref)
@@ -220,7 +219,7 @@ validator peg_in_validator(
     let config_fields = utils.get_config_as_data_list(
       utils.safe_list_at(self.reference_inputs, redeemer.config_ref_input_index),
       config_nft_policy_id,
-      config_nft_asset_name,
+      constants.config_nft_asset_name,
     )
     let bridged_token_policy_id =
       config.get_bridged_token_policy(config_fields)
@@ -532,7 +531,9 @@ validator peg_in_validator(
 const t_config_policy: ByteArray =
   #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
-const t_config_asset: ByteArray = "BifrostConfig"
+//Alias for the [CFG-7] constant; the ref-input fixture must carry the real
+//Config NFT name or get_config_as_data_list rejects it.
+const t_config_asset: ByteArray = constants.config_nft_asset_name
 
 const t_oracle_policy: ByteArray =
   #"ee111111111111111111111111111111111111111111111111111111"
@@ -846,7 +847,6 @@ fn t_complete_with(
   peg_in_validator.withdraw(
     t_oracle_policy,
     t_config_policy,
-    t_config_asset,
     PegInWithdrawRedeemer {
       config_ref_input_index: 0,
       action_type: CompletePegIn {
@@ -1028,7 +1028,6 @@ fn t_close_with(
   peg_in_validator.withdraw(
     t_oracle_policy,
     t_config_policy,
-    t_config_asset,
     PegInWithdrawRedeemer {
       config_ref_input_index: 0,
       action_type: Close { burnt_peg_in_nft_asset_name: t_pir_nft_asset, proof },
@@ -1307,7 +1306,6 @@ fn t_mint_with_created(created: Int) -> Bool {
   peg_in_validator.mint(
     t_oracle_policy,
     t_config_policy,
-    t_config_asset,
     PegInMintRedeemer { input_ref, new_peg_in_request: peg_in_request },
     t_peg_in_script_hash,
     tx,

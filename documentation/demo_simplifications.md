@@ -8,7 +8,18 @@ $Y_{federation}$ = 02b1e15a532a4e816ec75af608256b0808e36fb7d22560605178850885e53
 
 ## Pegin Taproot Script
 
-$Y_{federation}$ || <720> OP_CHECKSEQUENCEVERIFY OP_DROP <depositor's xonly pubkey> OP_CHECKSIG
+RETIRED (WI-081). This entry specified a ONE-leaf peg-in tree with $Y_{federation}$ as the
+internal key. Both halves of that are now wrong:
+
+- The internal key is $Y_{51}$, the FROST group key, so the 51% quorum sweeps by key path.
+- The tree has TWO leaves — a $Y_{federation}$ + CSV emergency sweep alongside the depositor
+  refund — per spec §Peg-in Taproot tree. Dropping the federation leaf removed the bridge's
+  recovery path for a deposit the quorum cannot sweep.
+
+The simplification survived as long as it did because this file also pinned
+$Y_{federation}$ to the FROST group key's own value, which made "internal key = $Y_{fed}$"
+and "internal key = $Y_{51}$" the same bytes and hid the difference. See the spec section for
+the real tree; the reference implementation is `pegin_deposit.py::pegin_outputkey`.
 
 ## Treasury Taproot
 

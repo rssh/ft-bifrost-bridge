@@ -5,7 +5,7 @@ Pure Python stdlib (no third-party deps). Reference implementation of
 documentation/bitcoin_tx_construction.md §1. Transaction layout:
 
     in  : your P2WPKH funding UTXO (one, auto-selected via the node)
-    out0: peg-in P2TR (value = --amount sat)          # Taproot(Y_fed, refund tapleaf)
+    out0: peg-in P2TR (value = --amount sat)          # Taproot(Y_51; federation + refund leaves)
     out1: OP_RETURN "BFR" || Q_auth                   # 35-byte one-key beacon: the depositor's
                                                        #   Taproot output key, which is both the
                                                        #   refund-leaf key and the BIP-322
@@ -26,7 +26,17 @@ import sys, json, hashlib, urllib.request, base64, argparse
 # (An earlier demo shortcut used the y_fed_seed key 0ce472ae…; heimdall's Y_51 restoration
 # made Y_51 the internal key again — keep this in sync with the on-chain treasury state.)
 Y_51 = bytes.fromhex("b1e15a532a4e816ec75af608256b0808e36fb7d22560605178850885e53f2854")
+# Y_federation x-only + the CSV delay of the federation leaf. Both are published by the
+# bridge: the Config datum carries y_federation and params.federation_csv_blocks, so read
+# them off the deployment rather than trusting these copies. They are INPUTS TO THE ADDRESS —
+# a wrong value yields a well-formed P2TR the federation cannot sweep and the depositor
+# cannot refund.
+Y_FEDERATION = bytes.fromhex("b1e15a532a4e816ec75af608256b0808e36fb7d22560605178850885e53f2854")
+FEDERATION_CSV = 144
 REFUND_TIMEOUT = 720
+# Spec constraint: the federation's window must open BEFORE the depositor's refund does,
+# or a depositor can take the deposit back while the federation is still recovering it.
+assert REFUND_TIMEOUT > FEDERATION_CSV, "refund_timeout must exceed federation_csv_blocks"
 HRP = "tb"                          # testnet4 bech32 human-readable part
 RPC_URL, RPC_USER, RPC_PASS = "http://127.0.0.1:48332", "bitcoin", "bitcoin"
 DUST = 294
@@ -134,13 +144,29 @@ def _pushnum(n):                     # minimal CScriptNum push of a small positi
     while x: b += bytes([x & 0xff]); x >>= 8
     if b and b[-1] & 0x80: b += b"\x00"
     return bytes([len(b)]) + b
+def _csv_checksig_leafhash(timeout, xonly):
+    # <timeout> OP_CSV OP_DROP <32-byte key> OP_CHECKSIG — the one leaf shape the protocol
+    # uses, for both the federation sweep and the depositor refund.
+    leaf = _pushnum(timeout) + bytes([0xb2, 0x75, 0x20]) + xonly + bytes([0xac])
+    return tagged("TapLeaf", bytes([0xc0, len(leaf)]) + leaf)       # len(leaf) < 253
+
 def pegin_outputkey(depositor_key):
-    # The refund leaf commits the depositor's Taproot OUTPUT key — the same key the
-    # beacon carries and the completion's BIP-322 signature verifies against. A wallet
-    # spends this leaf with its DEFAULT signer, that key being what it signs with.
-    leaf = _pushnum(REFUND_TIMEOUT) + bytes([0xb2, 0x75, 0x20]) + depositor_key + bytes([0xac])
-    leafhash = tagged("TapLeaf", bytes([0xc0, len(leaf)]) + leaf)   # len(leaf) < 253
-    t = int.from_bytes(tagged("TapTweak", Y_51 + leafhash), "big")
+    # The peg-in tree has TWO leaves (spec §Peg-in Taproot tree):
+    #   leaf 1  <federation_csv_blocks> OP_CSV OP_DROP <Y_federation> OP_CHECKSIG
+    #             — the federation's emergency sweep, if the 51% key path cannot act.
+    #   leaf 2  <refund_timeout>        OP_CSV OP_DROP <Q_auth>       OP_CHECKSIG
+    #             — the depositor's self-refund. Q_auth is their Taproot OUTPUT key, the
+    #               same key the beacon carries, so a wallet spends it with its DEFAULT
+    #               signer and an SPO reads the leaf key instead of guessing it.
+    # The internal key is Y_51, the FROST group key: the 51% quorum sweeps by key path,
+    # which is the ordinary route and costs no script reveal.
+    fed = _csv_checksig_leafhash(FEDERATION_CSV, Y_FEDERATION)
+    refund = _csv_checksig_leafhash(REFUND_TIMEOUT, depositor_key)
+    # BIP-341 TapBranch: the two children are hashed in lexicographic order, so which leaf
+    # is called "first" does not affect the root.
+    a, b = sorted([fed, refund])
+    root = tagged("TapBranch", a + b)
+    t = int.from_bytes(tagged("TapTweak", Y_51 + root), "big")
     Q = add(lift_x(int.from_bytes(Y_51, "big")), mul(t))
     return Q[0].to_bytes(32, "big")
 def taproot_keypath_output_key(xonly):

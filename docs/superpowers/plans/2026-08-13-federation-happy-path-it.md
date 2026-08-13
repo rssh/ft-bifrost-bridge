@@ -47,82 +47,91 @@ yaci-store Blockfrost-compatible API.
 
 ---
 
-### Task 1: Spike – pin down the demo epoch loop's genesis choreography
+## Upstream facts (verified 2026-08-13, heimdall main `44a6650`)
 
-No production code. Answers three questions the rest of the plan branches on,
-in `~/projects/lantr/heimdall`.
+The originally planned genesis spike is unnecessary: its questions are
+answered by landed heimdall work and its docs. The executor should NOT
+re-derive these:
+
+- `heimdall demo --deterministic` runs the HTTP DKG reproducibly:
+  `scripts/dkz/README.md` documents all three instances converging on a FIXED
+  group key, run after run, and the run continuing Sign -> Submit with the
+  LEADER posting the FROST-signed TM (proven on preprod). Genesis choreography
+  is therefore **DkgRehearsal** (Task 5); the `HeimdallFix` branch is retired
+  and Task 5a with it.
+- The collapsed `y_federation = Y_51` convention is legal (2180e5b handles
+  bridges "still using the collapsed Y_fed = Y_51 convention"); the
+  "bad pair is an error" rule is the CSV ordering
+  `refund_timeout > federation_csv_blocks` (`PeginTreeParams::validate`).
+- WI-081: the peg-in tree has TWO leaves again (federation sweep + depositor
+  refund); the depositor binary takes `--frost-key`, `--y-federation`,
+  `--federation-csv-blocks`, `--refund-timeout-blocks`
+  (see `scripts/put_pegin_alice.sh` – Alice/Bob depositor scripts exist).
+- WI-083: heimdall's `bootstrap-treasury-info` / `bootstrap-registry` /
+  `bootstrap-ban-list` are LEGACY; binocular `deploy-bridge` is the genesis
+  authority (it mints all three federation NFTs in the federation tx).
+- WI-084 ([CFG-9]): heimdall READS `params[8] = pegin_refund_timeout_blocks`
+  from the Config and REFUSES a datum without it or with
+  `pegin_refund_timeout_blocks <= federation_csv_blocks`. ft's `config.ak`
+  and binocular's mirror do not have this field yet – hence THIS task.
+
+---
+
+### Task 1: params[8] – bring ft and binocular up to heimdall's [CFG-9]
+
+Without params[8], heimdall main refuses every bridge binocular main deploys
+(`config params[8] (pegin_refund_timeout_blocks)` missing). Three
+repositories, spec first.
 
 **Files:**
-- Create: `~/projects/lantr/heimdall/docs/local/notes/2026-08-federation-it-spike.md`
-  (findings note, committed)
+- Modify: `documentation/technical_documentation.md` (ft) – §Config datum
+  params record + §Parameter registry `refund_timeout` row
+- Modify: `onchain/lib/bifrost/types/config.ak` (ft) – append
+  `pegin_refund_timeout_blocks: Int` to `ConfigParams`, add
+  `get_pegin_refund_timeout_blocks` (index 8), extend
+  `config_getters_match_datum_fields`
+- Modify: `~/projects/lantr/binocular/src/main/scala/binocular/watchtower/ConfigTypes.scala`
+  – append the field to the `ConfigParams` mirror (and fix the stale rev-5.4
+  index comment at the top of the file)
+- Modify: binocular `reference.conf` + `BridgeConfig.scala` – add
+  `pegin-refund-timeout-blocks = 4320` default, written by `deploy-bridge`
+  into params[8]
+- Test: ft `aiken check`; binocular `ConfigDatumEncodingTest` + `ReferenceConfTest`
 
 **Interfaces:**
-- Produces: the decision record consumed by Task 5 (`GenesisChoreography`:
-  `DkgRehearsal` or `HeimdallFix`), plus the exact log line format for
-  extracting the group key.
+- Produces: params[8] on-chain; `BridgeConfig.peginRefundTimeoutBlocks: Int`
+  (binocular) consumed by Task 4's genesis and Task 6's depositor call.
 
-- [ ] **Step 1: Run the 3-process local HTTP DKG demo twice, deterministic**
+- [ ] **Step 1: ft spec** – in §Config datum, add `pegin_refund_timeout_blocks`
+  to the params record with a [CFG-9] check ID: "`config.ak` MUST publish the
+  refund-leaf CSV delay as `params[8]`. Constraint:
+  `pegin_refund_timeout_blocks > federation_csv_blocks`." Update the
+  §Parameter registry `refund_timeout` row (no longer "per-instance constant"
+  – home: Config params[8]; consumers: depositors, SPO address
+  reconstruction). Note heimdall already enforces both reads.
+- [ ] **Step 2: ft config.ak** – append the field + getter + pin it in
+  `config_getters_match_datum_fields`; `aiken check -D`; rebuild
+  `plutus.json` (`aiken build`).
+- [ ] **Step 3: Commit (ft)**
 
 ```bash
-cd ~/projects/lantr/heimdall && nix develop
-cargo build --release
-for run in 1 2; do
-  for i in 1 2 3; do
-    ./target/release/heimdall demo --config heimdall.localdkg.toml \
-      --index $i --deterministic > /tmp/dkg-run$run-$i.log 2>&1 &
-  done
-  wait   # the demo prints the signed TM and exits on ctrl-c; give it ~90s then kill
-done
-grep -h "Y_51\|group key\|our Y_51" /tmp/dkg-run*-1.log
+git add documentation/technical_documentation.md onchain
+git commit -m "feat(config): publish the peg-in refund timeout as params[8] (CFG-9)"
 ```
 
-Expected: each run completes DKG over HTTP on ports 18500-18502 and logs the
-group key. Record the exact log line format.
-
-- [ ] **Step 2: Compare group keys across the two runs**
-
-Same key both runs ⇒ the seeded HTTP DKG is reproducible run-to-run.
-Different keys ⇒ note WHICH context inputs differ (epoch number, identifiers).
-
-- [ ] **Step 3: Compare against `frost-treasury`**
-
-```bash
-./target/release/heimdall frost-treasury --config heimdall.localdkg.toml
-```
-
-Record whether `run_demo_dkg`'s deterministic key equals the HTTP DKG's key.
-(Expected from code reading: NO – different derivation paths. That is fine;
-only run-to-run stability of the HTTP DKG matters.)
-
-- [ ] **Step 4: Read the demo TM's input-0 signing key from the logs**
-
-From run 1's logs, record which key the treasury input's spend info used
-(`build_tm` logs the treasury address/key) and whether `sign_phase` produced a
-signature that verifies against it. This confirms or refutes: "the first TM
-FROST-verifies only when the datum key equals the DKG group key".
-
-- [ ] **Step 5: Write the decision**
-
-In the findings note, record ONE of:
-
-- **DkgRehearsal** (expected): the seeded HTTP DKG reproduces the same group
-  key run-to-run with the same fixture identities and epoch. Genesis order in
-  Task 5 becomes: rehearse DKG on the mock (3 processes, deterministic),
-  capture Y_51 from logs, kill; deploy the bridge with
-  `y_federation = Y_51`; fund the Bitcoin treasury at
-  `frost-treasury --frost-key <Y_51>`'s address; start the real run – its DKG
-  re-derives the same key, so the first TM's treasury input FROST-verifies.
-- **HeimdallFix**: the key is not reproducible (or input-0 signing fails).
-  Then Task 5a (conditional) implements the smallest fix in heimdall – e.g.
-  persist/reload the DKG key packages from `protocol.state_dir` across
-  restarts so a rehearsed ceremony's shares are reused on the real run.
-  Scope it in the note before coding.
-
-- [ ] **Step 6: Commit the findings note in heimdall**
+- [ ] **Step 4: binocular mirror** – failing test first: extend
+  `ConfigDatumEncodingTest` with the 9-field params round-trip and a
+  heimdall-shape assertion (params[8] present, Int); then append the field to
+  `ConfigTypes.ConfigParams`, thread it through `deploy-bridge`'s datum
+  construction from the new `BridgeConfig` key, update `reference.conf`
+  (default 4320, env override `BIFROST_PEGIN_REFUND_TIMEOUT_BLOCKS`).
+- [ ] **Step 5: binocular full suite** – cache-reset verify:
+  `sbt shutdown && pkill -f sbt-launch && sbt cleanFull && sbt test`.
+- [ ] **Step 6: Commit (binocular)**
 
 ```bash
-git add docs/local/notes/2026-08-federation-it-spike.md
-git commit -m "docs: record the federation-IT genesis spike findings"
+git add src/main/scala/binocular/watchtower/ConfigTypes.scala src/main/scala/binocular/watchtower/BridgeConfig.scala src/main/resources/reference.conf src/test/scala/binocular
+git commit -m "feat(config): write pegin_refund_timeout_blocks as params[8] (CFG-9)"
 ```
 
 ---
@@ -359,8 +368,9 @@ git commit -m "test(it): BridgeWorld genesis - devkit, regtest, oracle, bridge d
 - Test: `it/src/test/scala/binocular/federation/SpoDkgTest.scala`
 
 **Interfaces:**
-- Consumes: Task 1's decision record (assumed **DkgRehearsal**; if the spike
-  said **HeimdallFix**, do Task 5a first); `ProcessActor`, `HeimdallBuild`.
+- Consumes: the **DkgRehearsal** choreography (see Upstream facts – the
+  seeded HTTP DKG is reproducible, per `scripts/dkz/README.md`);
+  `ProcessActor`, `HeimdallBuild`.
 - Produces:
 
 ```scala
@@ -383,10 +393,16 @@ missing keys), `bitcoin.{rpc_url,rpc_user,rpc_pass,network="regtest",
 fee_rate_sat_per_vb=1,federation_csv_blocks}`, `protocol` short timeouts from
 the localdkg template, `protocol.state_dir` per SPO.
 
-Registration: run `heimdall register-spo` once per SPO (subprocess, each with
-its own TOML + bifrost URL), then assert the roster on-chain has 3 entries
-(read via the registry reader used by `show-roster`, or scan the registry
-address UTxOs by NFT policy from `deployed.sposRegistryPolicyId`).
+Registration: run `heimdall register-spo` once per SPO (subprocess, each
+with its own TOML + bifrost URL), mirroring `scripts/dkz/register-spo-{1,2,3}.sh`
+for the exact flag set; then assert the roster on-chain has 3 entries (read
+via the registry reader used by `show-roster`, or scan the registry address
+UTxOs by NFT policy from `deployed.sposRegistryPolicyId`).
+
+Stake gotcha (from `scripts/dkz/README.md`): synthetic pools with ZERO stake
+are fatal to the stake-weighted DKG roster. Set `min_stake_lovelace = 1` and
+`demo_exclude_unstaked = true` in the TOMLs exactly as the dkz preprod
+configs do, or delegate a trivial stake to each pool on the devnet.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -405,8 +421,9 @@ class SpoDkgTest extends AnyFunSuite with YaciDevKit {
 - [ ] **Step 2: Run to verify it fails** – compile failure, then stage-wise.
 - [ ] **Step 3: Implement** – `rehearseGroupKey` spawns 3
   `heimdall demo --config <localdkg-style toml> --index i --deterministic`
-  processes on the mock chain, `awaitLogLine` for the group-key line recorded
-  in the Task-1 note, kills them, parses the key. `start` renders TOMLs (real
+  processes on the mock chain, `awaitLogLine` for the group-key line (the
+  `PublishKeys: group_key = <hex>` form documented in `scripts/dkz/README.md`;
+  confirm against a live run), kills them, parses the key. `start` renders TOMLs (real
   chain config), runs registration, spawns the three `demo --deterministic`
   processes named faith/grace/hal with logs in `bridge.logDir`.
 - [ ] **Step 4: Run to verify it passes** – `sbt "it/testOnly *SpoDkgTest"`.
@@ -416,18 +433,6 @@ class SpoDkgTest extends AnyFunSuite with YaciDevKit {
 git add it/src/test/scala/binocular/federation
 git commit -m "test(it): SPO ring - TOML generation, on-chain registration, HTTP DKG"
 ```
-
----
-
-### Task 5a (conditional, heimdall): first-TM signability fix
-
-Only if Task 1 concluded **HeimdallFix**. Scope from the spike note; the
-candidate named there: persist DKG key packages under `protocol.state_dir` and
-reload them on start when present, so a rehearsed ceremony's shares survive
-into the real run. TDD inside heimdall (`cargo test` unit on the
-persist/reload round-trip; `cargo clippy --all-targets`); conventional commit
-in `~/projects/lantr/heimdall`. Do not start it without the spike note naming
-the exact gap.
 
 ---
 
@@ -454,11 +459,26 @@ case class Minted(fsat: Long)
 def expectPegInRequest(d: Deposit): Unit    // PIR datum decoded, amount + beacon key checked
 ```
 
-`deposit(sats)`: generate a fresh regtest WIF into the temp dir; fund its
-P2WPKH address from the bitcoind wallet; mine 1; run
-`heimdall depositor --wif <path> --amount-sat <sats> --broadcast` with the
-peg-in key arguments read from the deployed bridge (group key, y_federation,
-csv, refund timeout); mine until oracle-confirmed (`mineAndRelay(3)`);
+`deposit(sats)`: generate a fresh regtest WIF into the temp dir (see
+heimdall `scripts/gen_depositor_key.py`); fund its P2WPKH address from the
+bitcoind wallet; mine 1; run the depositor exactly as
+`scripts/put_pegin_alice.sh` does:
+
+```bash
+heimdall-repo/target/release/depositor \
+  --config <generated toml> \
+  --frost-key <groupKey hex> \
+  --y-federation <Config y_federation hex> \
+  --federation-csv-blocks <Config params[4..] csv> \
+  --refund-timeout-blocks <Config params[8]> \
+  --depositor-wif-file <wif path> \
+  --deposit-amount-sat <sats> \
+  --fee-sat 200 --submit
+```
+
+(under the collapsed convention `--frost-key` and `--y-federation` are the
+same hex, which 2180e5b explicitly supports); mine until oracle-confirmed
+(`mineAndRelay(3)`);
 `deposit-proof` then `pegin-request` in-process mints the PIR with Alice's
 Cardano address (from `Party.Alice.address`) as recipient.
 `expectPegInRequest` polls the peg-in script address for the PIR NFT and
@@ -712,14 +732,14 @@ git commit -m "chore: bump heimdall and binocular submodules to the federation-I
 ## Self-Review
 
 - **Spec coverage:** cast/topology (Tasks 2, 4, 5), scenario steps 1-6 (Tasks
-  4, 5, 6, 7, 8, 9), genesis-key risk (Task 1 + 5a), DSL three-file shape
+  4, 5, 6, 7, 8, 9), genesis-key risk (resolved to DkgRehearsal by the
+  Upstream-facts evidence; params[8] prerequisite is Task 1), DSL three-file shape
   (Tasks 4, 5, 6, 7, 8), failure reporting (Global Constraints + Task 9 step
   3), success criteria 1-4 (Task 9 steps 2-4), repo mechanics (Task 10). The
   spec's `BridgeAssertions.scala` exists as its own file (Task 7); lifecycle
   and actor files match the spec's names.
-- **Placeholder scan:** Task 5a is intentionally conditional and scoped by the
-  Task-1 note - not a placeholder, a gate. Task 8 folds its verification into
-  Task 9 deliberately (integration verbs have no meaningful isolated test).
+- **Placeholder scan:** Task 8 folds its verification into Task 9
+  deliberately (integration verbs have no meaningful isolated test).
 - **Type consistency:** `SpoRing.rehearseGroupKey`/`start`, `Bridge.user`,
   `Deposit`, `TmRecord`, `frostSignedBy`, `mineAndRelay` are used with the
   same signatures across Tasks 4-9.

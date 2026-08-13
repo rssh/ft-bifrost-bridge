@@ -73,10 +73,30 @@ scripts; they change with every compiler bump.
 | 1 | `01-bootstrap-dkz.sh` | Devnet up → fund wallet (faucet) → genesis treasury outpoint on regtest → 4 real stake pools (`register_pool`, 2-epoch activation + `active_stake` gate) → registry bootstrap (`bootstrap-treasury-info` → `bootstrap-registry` → `deploy-registry-ref`) → `register-spo` ×4 → `show-roster` → heimdall ×4 registry-driven DKG → assert identical `Y_51` across all 4 | **PASSING** (2026-07-20, ~80 s warm: stake-weighted 3-of-4 off the real on-chain registry, anchored ceremony window, all four SPOs converged on one `Y_51`). Automates run-dkz's "local yaci devnet / WI-024" path. Needed two heimdall fixes against yaci-store quirks: map-form cost_models and the `/epochs/latest` boundary-time fallback. |
 | 2 | `02-fraud-dkz.sh` | DKG with one misbehaving/absent SPO → exclusion evidence + equivocation detection → ceremony completes 3-of-4 → (ban pipeline) | partially blocked: on-chain fault proofs are **N4** (mock verifier today); evidence + reduced-rerun assertions work now |
 | 3 | `03-federation-switch.sh` | Mine past `federation_csv_blocks` → federation key spends treasury via script leaf → oracle proves the spend → key rotated to `y_federation` | Bitcoin-side spend testable now; on-chain federation-reset is **N10b** (+ witness-walker reuse **N15**) |
+| 5 | `05-pegin-sweep.sh` | Derive the treasury off chain (Y_51 + y_federation) → fund it on regtest → `binocular init` + `deploy-bridge` (WI-068 genesis) → depositor builds a 35-byte `"BFR" ‖ Q_auth` deposit → `pegin-request` → `sweep-pegins` and assert the TM **spends the deposit** on Bitcoin | **BLOCKED at step 4** — see `internal-docs/bitfrost/experiments/2026-08-13-pegin-sweep-devnet-blocked.md`. Steps 0–3 pass. No bridge can be deployed on any devkit version available today (§Devnet version, below) |
 
-First target when picked up (per plan §4): the y51 peg-in → sweep → peg-out
-playbook, which has a known-good trace to assert against — after scenario 1
-lands.
+## Devnet version: the bench is wedged between two yaci-devkit releases
+
+Read this before debugging a script transaction that "just fails".
+
+* **0.11.0-beta1** (the year-old pin this bench shipped with) is cardano-node
+  10.5.0, **protocol version 10**. binocular has compiled for `vanRossemPV`
+  (PV11) since 2026-07-27, so every script it deploys is rejected at submit with
+  `MalformedReferenceScripts`.
+* **0.12.0-beta5** is cardano-node 11.0.1, **protocol version 11**, but it never
+  installs the PV11 Plutus cost models. It tries — `create-node` submits a
+  governance proposal carrying `plutus-costmodels-v11.json` — and the submission
+  NPEs, because the devnet ledger carries no PlutusV2 table at all
+  (`cardano-cli conway query protocol-parameters` → `costModels: {PlutusV1, PlutusV3}`).
+  Its own log ends `Extended builtins may not be available.` The same NPE breaks
+  the faucet.
+
+`.env.example` pins 0.12.0-beta5. **heimdall works on it** — an aiken PlutusV3
+mint confirms — since aiken's output does not need the extended builtins. binocular's
+does, so `init` / `deploy-bridge` / `pegin-request` are rejected for overspending
+their evaluation budget, and no bridge can be deployed. The devnet funds wallets
+through the devkit's pre-funded wallet accounts (`00-lib.sh::yaci_topup`), not the
+faucet.
 
 ## Usage
 

@@ -20,6 +20,7 @@ cd "$HERE"
 
 STORE_API="http://localhost:8080/api/v1"
 ADMIN_API="http://localhost:10000/local-cluster/api"
+WALLET_API="http://localhost:10000/api/v1/wallet"
 LOGS="$HERE/data/logs"
 mkdir -p "$LOGS" data/generated
 
@@ -103,7 +104,7 @@ check_dkg_pacing() {
 
 wait_store_api() {
   log "waiting for yaci-store API..."
-  for _ in $(seq 120); do
+  for _ in $(seq 240); do
     curl -sf "$STORE_API/blocks/latest" >/dev/null 2>&1 && { log "yaci-store is up"; return 0; }
     sleep 2
   done
@@ -112,13 +113,34 @@ wait_store_api() {
 
 # Faucet: POST /local-cluster/api/addresses/topup {address, adaAmount}
 # (AddressController in yaci-devkit).
+# Funding is a TRANSFER out of one of yaci-devkit's 20 pre-funded wallet accounts
+# (10,000 tADA each), not the local-cluster faucet.
+#
+# `POST /local-cluster/api/addresses/topup` is broken on yaci-devkit 0.12.0-beta5:
+# it builds its transaction from protocol parameters fetched over N2C and dies in
+# LocalProtocolParamSupplier.cborToCostModel with `NullPointerException: "hexString"
+# is null` — a cost model the PV11 parameters carry as null. The failure surfaces
+# only as HTTP 500 `{"message":"Topup failed"}`, because AccountService silences
+# the root logger for the duration of the call (set LOGGING_LEVEL_ROOT=DEBUG on
+# the container to see the trace). The wallet API builds through the same store
+# every other client reads and is unaffected.
+#
+# A DIFFERENT account per call, round-robin: consecutive transfers out of ONE
+# account race on its own unconfirmed change, and each of ours funds a distinct
+# one-shot outref, so they must not collapse into a chain.
+YACI_FUND_ACCOUNT=${YACI_FUND_ACCOUNT:-0}
 yaci_topup() {
-  local addr="$1" ada="$2"
-  curl -sf -X POST "$ADMIN_API/addresses/topup" \
-    -H 'Content-Type: application/json' \
-    -d "{\"address\": \"$addr\", \"adaAmount\": $ada}" >/dev/null ||
-    die "topup of $addr failed (admin API $ADMIN_API)"
-  log "topped up $addr with $ada tADA"
+  local addr="$1" ada="$2" body out
+  body=$(printf '{"accountId": "%s", "receiverAddress": "%s", "amounts": [{"unit": "lovelace", "quantity": "%s"}]}' \
+    "$YACI_FUND_ACCOUNT" "$addr" "$((ada * 1000000))")
+  out=$(curl -sf -X POST "$WALLET_API/transfer" -H 'Content-Type: application/json' -d "$body") ||
+    die "funding $addr from devkit account $YACI_FUND_ACCOUNT failed ($WALLET_API/transfer)"
+  case "$out" in
+  *'"success":true'*) ;;
+  *) die "funding $addr from devkit account $YACI_FUND_ACCOUNT was refused: $out" ;;
+  esac
+  log "funded $addr with $ada tADA (devkit account $YACI_FUND_ACCOUNT)"
+  YACI_FUND_ACCOUNT=$(((YACI_FUND_ACCOUNT + 1) % 20))
 }
 
 # First UTxO of an address as TX:IDX (store API, blockfrost field names).
@@ -213,6 +235,47 @@ print(ins - int(d["total_output"]) - int(d["fees"]))
 # works for wallet-level commands; per-SPO state only matters for `demo`).
 hd() { docker compose run --rm --no-deps -T heimdall-spo1 "$@"; }
 hd_pool() { docker compose run --rm --no-deps -T --entrypoint register_pool heimdall-spo1 "$@"; }
+
+# Scenario 5's single node: its own config (data/generated/heimdall-sweeper.toml)
+# and its own state dir, so a sweep run neither reads nor corrupts the SPO
+# cluster's DKG state.
+hs() { docker compose run --rm --no-deps -T heimdall-sweeper "$@"; }
+hs_depositor() {
+  docker compose run --rm --no-deps -T --entrypoint depositor heimdall-sweeper "$@"
+}
+
+# ── binocular ("bitfrost") one-shots ─────────────────────────────────────
+# The bridge identifiers reach binocular through the ENVIRONMENT
+# (config/binocular.conf reads ${?VAR}), so callers append `-e VAR=value` pairs
+# to BN_ENV as each step mints them. A value learned but not exported is the
+# whole failure mode this shape avoids: HOCON silently leaves the key at its
+# reference.conf default and the next command derives a different script hash.
+BN_ENV=()
+bn_env() { BN_ENV+=(-e "$1=$2"); }
+bn() {
+  docker compose run --rm --no-deps -T "${BN_ENV[@]}" bitfrost \
+    --config /etc/binocular.conf "$@"
+}
+
+# The value of a binocular `Console.info(label, value)` line — printed as
+# "  <label>: <value>" wrapped in ANSI colour. Matched on the WHOLE label, not a
+# substring: the deploy summary prints "config-nft-policy-id" and
+# "heimdall config_nft_policy_id" and several "... policy (config field N)"
+# labels, and a substring match silently returns whichever came first.
+bn_field() {
+  local file="$1" key="$2" out
+  out=$(sed -e 's/\x1b\[[0-9;]*m//g' "$file" | python3 -c '
+import re, sys
+key = sys.argv[1]
+for line in sys.stdin:
+    m = re.match(r"\s*(.+?):\s+(.*?)\s*$", line.rstrip("\n\r"))
+    if m and m.group(1).strip() == key:
+        print(m.group(2))
+        break
+' "$key") || true
+  [ -n "$out" ] || die "binocular field '$key' not found in $file — read it and fix the extraction"
+  printf '%s\n' "$out"
+}
 
 # Extract the first regex capture from a teed log, or die pointing at it.
 extract() {

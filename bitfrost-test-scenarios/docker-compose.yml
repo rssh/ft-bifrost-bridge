@@ -50,7 +50,13 @@ services:
       ogmios_enabled: "false"
       kupo_enabled: "false"
       node: node1
-      yaci_cli_mode: native
+      # The CLI runs on the JVM, the store on its native image. Not symmetry for
+      # its own sake: the native CLI in 0.12.0-beta5 hits GraalVM reflection
+      # failures on the N2C client (NoSuchMethodException on
+      # MiniProtoClientInboundHandler) and then NPEs while submitting the genesis
+      # Plutus cost-model governance proposal, none of which is fatal loudly. The
+      # store has no jar in the image, so it stays native.
+      yaci_cli_mode: java
       yaci_store_mode: native
     ports:
       - "3001:3001" # cardano-node n2n
@@ -59,6 +65,9 @@ services:
       - "10000:10000" # local-cluster admin API (topup, utxos)
     volumes:
       - ./data/yaci:/clusters
+      # Genesis overrides — chiefly the protocol version that selects the Plutus
+      # cost models baked into the devnet. See the file.
+      - ./config/yaci-node.properties:/app/config/node.properties:ro
 
   # The watchtower: binocular oracle + bridge deploy tooling. Scenario
   # scripts drive one-shot commands via `docker compose run --rm bitfrost
@@ -109,6 +118,20 @@ services:
       - ../onchain/plutus.json:/contracts/plutus.json:ro
     ports:
       - "18501:18501"
+
+  # Scenario 5's single heimdall: depositor, sweeper and mover in one. Never
+  # `up`ped — the scenario drives it as one-shots (`docker compose run`), so the
+  # command below is only what a bare `up` would run. Its own config and state
+  # dir keep a sweep run off the SPO cluster's DKG state.
+  heimdall-sweeper:
+    <<: *heimdall
+    command: ["show-treasury", "--config", "/etc/heimdall/heimdall.toml"]
+    volumes:
+      - ./data/generated/heimdall-sweeper.toml:/etc/heimdall/heimdall.toml:ro
+      - ./keys:/keys
+      - ./data/sweeper:/state
+      - ../onchain/plutus.json:/contracts/plutus.json:ro
+    ports: []
 
   heimdall-spo2:
     <<: *heimdall

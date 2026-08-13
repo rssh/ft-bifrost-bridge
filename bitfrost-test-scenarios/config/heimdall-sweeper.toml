@@ -1,0 +1,79 @@
+# The single heimdall node of scenario 5 (one-key beacon peg-in → sweep).
+# TEMPLATE: scripts/05-pegin-sweep.sh renders it to
+# data/generated/heimdall-sweeper.toml, replacing the @...@ placeholders with
+# the identifiers `binocular deploy-bridge` mints.
+#
+# Scenario 5 needs no SPO cluster. `sweep-pegins` / `run-mover` derive Y_51 from
+# the DETERMINISTIC demo DKG (demo.min_signers-of-demo.max_signers) and hold every
+# signing share in-process, so the treasury signature does not come from the
+# 4-node roster scenario 1 stands up. What this scenario proves is the peg-in
+# TREE — the beacon's Q_auth reaching the refund leaf and the taproot tweak — and
+# that is independent of where the shares came from.
+
+[protocol]
+state_dir = "/state"
+
+[demo]
+# Y_51 = the 2-of-3 demo group key. Named here rather than defaulted because it
+# is an input to the treasury AND deposit addresses: step 2 funds the treasury at
+# an address derived from these two numbers, hours before anything reads them
+# back.
+min_signers = 2
+max_signers = 3
+
+[bitcoin]
+network = "regtest"
+rpc_url = "http://bitcoind:18443"
+rpc_user = "bifrost"
+rpc_pass = "bifrost"
+# DEV-ONLY direct broadcast: production SPOs run no Bitcoin node and the
+# binocular watchtower relays the TM off the posted UnconfirmedTm record. Here
+# the sweep's own broadcast is what proves the deposit is spendable, so the
+# scenario asserts against regtest directly rather than through the relay.
+submit = true
+# Both are Config values on a deployed bridge (params[7] and params[8]) and
+# heimdall takes the PUBLISHED one, failing loudly if a local copy disagrees.
+# They are set here only because step 2 runs BEFORE the bridge exists: deriving
+# the genesis treasury address is the one job that cannot read them off the chain.
+# Kept identical to what deploy-bridge publishes, so the agreement check passes.
+federation_csv_blocks = @FEDERATION_CSV_BLOCKS@
+pegin_refund_timeout_blocks = @PEGIN_REFUND_TIMEOUT_BLOCKS@
+
+[cardano]
+blockfrost_url = "http://yaci-devkit:8080/api/v1/"
+blockfrost_project_id = "devnet"
+stake_source = "yaci_store"
+# The short-epoch devnet's era-forecast horizon is only tens of slots ahead, so
+# the production +1800s validTo lands past it (TimeTranslationPastHorizon at
+# submit).
+tm_validity_window_secs = 90
+submit_oracle = false
+
+# ── the deployed bridge (binocular deploy-bridge, step 5) ────────────────
+registry_blueprint = "/contracts/plutus.json"
+# Both halves of the federation are re-derived from the ONE outref deploy-bridge
+# spent for the registry + ban + treasury roots.
+registry_bootstrap = "@FEDERATION_ONE_SHOT@"
+treasury_bootstrap = "@FEDERATION_ONE_SHOT@"
+config_address = "@CONFIG_ADDRESS@"
+config_nft_policy_id = "@CONFIG_NFT_POLICY@"
+config_nft_asset_name = "@CONFIG_NFT_ASSET@"
+# The TM validator: its script hash IS the TM NFT policy and its address is where
+# TM records are posted (`binocular tm-script`).
+treasury_address = "@TM_ADDRESS@"
+treasury_policy_id = "@TM_POLICY@"
+treasury_asset_name = ""
+tm_script_cbor = "@TM_SCRIPT_CBOR@"
+# The bridge-state singleton carries the treasury pointer; the key keeps its old
+# name (see CardanoConfig::cpo_policy_id).
+cpo_policy_id = "@BRIDGE_STATE_POLICY@"
+pegin_script_address = "@PEGIN_ADDRESS@"
+pegin_policy_id = "@PEGIN_POLICY@"
+pegout_script_address = "@PEGOUT_ADDRESS@"
+bridged_token_unit = "@BRIDGED_TOKEN_UNIT@"
+
+[http]
+bind_address = "0.0.0.0"
+
+[bifrost]
+skey_path = "/keys/sweeper-bifrost.skey"

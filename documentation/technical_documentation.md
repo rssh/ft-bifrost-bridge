@@ -864,9 +864,17 @@ number lives inside `params`.
 | 5 | `max_faults_before_permanent` | Int | ban schedule — fault count past which a ban stops expiring |
 | 6 | `max_validity_window_ms` | Int | ban schedule — the bound on an ApplyBan transaction's validity interval |
 | 7 | `federation_csv_blocks` | Int | the CSV timeout baked into the federation Taproot leaves |
+| 8 | `pegin_refund_timeout_blocks` | Int | the CSV timeout of the peg-in tree's depositor refund leaf ([CFG-9]) |
 
 - [CFG-1] The bridged-token asset name MUST be the constant `"fSAT"`, declared in
   `lib/bifrost/constants.ak`.
+- [CFG-9] `pegin_refund_timeout_blocks` is PUBLISHED rather than configured per operator,
+  because it is one of the four inputs to a peg-in deposit address and every SPO must
+  reconstruct that address byte for byte. Left local, two SPOs on different values freeze
+  different peg-in sets from the same PegInRequest, build different Treasury Movements and
+  never reach a signing threshold — with nothing in any log naming the cause. It sits beside
+  `federation_csv_blocks` because the two do the same job, and every deriver MUST check
+  `pegin_refund_timeout_blocks > federation_csv_blocks` rather than assume it.
 - [CFG-2] `tm_script_hash` has NO on-chain reader. It is published so that off-chain readers can
   locate the TM address without a hard-coded constant.
 - [CFG-3] Fields #5, #8 and #10, and every field of `params`, have NO on-chain reader. They are
@@ -2060,7 +2068,7 @@ The leaf commits the depositor's Taproot **output** key, the same key the beacon
 A wallet therefore spends this leaf with its **default** signer, that key being the one it
 signs with; no untweaked-signing interface is required.
 
-`Q_auth` is the depositor's 32-byte Taproot output key, taken from the beacon. `refund_timeout` is a per-instance constant (constraint: `> federation_csv_blocks`, so the federation can sweep before the refund opens; example 4320 blocks ≈ 30 days).
+`Q_auth` is the depositor's 32-byte Taproot output key, taken from the beacon. `refund_timeout` is `params.pegin_refund_timeout_blocks`, PUBLISHED in the Config UTxO ([CFG-9]) — constraint: `> federation_csv_blocks`, so the federation can sweep before the refund opens; example 4320 blocks ≈ 30 days.
 
 Merkle tree (2 leaves):
 ```
@@ -5263,7 +5271,7 @@ Bifrost's watchtower design relies on a minimal trust assumption: only one hones
 | fulfillment freshness margin (default 7 days) | heimdall config (off-chain, not on-chain) | operator-tunable, no Config field | SPO TM builder's skip rule |
 | `y_federation` | Config **#11** | governance Update ([CFG-6]) | address derivation; CSV leaves; the Update-Y federation branch ([UY-5]), which reads it from the Config reference input |
 | `federation_csv_blocks` | Config **#1** `params[7]` | governance Update ([CFG-6]) | address derivation; CSV leaves. No on-chain reader |
-| `refund_timeout` | baked into each deposit's refund leaf | per-instance constant, `> federation_csv_blocks` | depositors; SPO address reconstruction |
+| `refund_timeout` | baked into each deposit's refund leaf | Config `params.pegin_refund_timeout_blocks` ([CFG-9]), `> federation_csv_blocks` | depositors; SPO address reconstruction |
 | ban parameters (`base_ban_duration_ms`, `max_faults_before_permanent`, `max_validity_window_ms`) | compile-time parameters of `spo-bans.ak`, mirrored in Config `params[4..6]` | per-instance constants | ban validator; the ApplyBan builder reads the mirror |
 | protocol constants (Bitcoin dust 330 sat; Binocular depth 100 blocks + challenge; `security_threshold` 51%; BTMR1 prefix `6a4542544d5231`, 71-byte commitment; fBTC asset name `"fSAT"` [CFG-1]; bridge state asset name `"BSS"`; Config NFT name `"BIFCFG"` [CFG-7]; Treasury state NFT name `"BFRTRY"` [CFG-4]; registration root name `"reg-root"`) | this specification / Binocular [1] | fixed | various |
 

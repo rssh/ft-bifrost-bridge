@@ -352,6 +352,7 @@ fn t_config_datum() -> config_types.ConfigDatum {
       max_faults_before_permanent: 3,
       max_validity_window_ms: 3_600_000,
       federation_csv_blocks: 144,
+      pegin_refund_timeout_blocks: 720,
     },
     bridged_token_policy: #"aa02",
     completed_peg_ins_policy: #"aa03",

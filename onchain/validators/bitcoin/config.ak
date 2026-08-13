@@ -183,7 +183,8 @@ const t_own_ref: OutputReference =
 //9 spos_registry_policy_id, 10 treasury_info_policy_id, 11 y_federation.
 //params holds (schedule, fee_rate_sat_per_vb, per_pegout_fee,
 //min_peg_out_fbtc, base_ban_duration_ms, max_faults_before_permanent,
-//max_validity_window_ms, federation_csv_blocks).
+//max_validity_window_ms, federation_csv_blocks,
+//pegin_refund_timeout_blocks).
 //Raw on purpose: the spend handler itself takes the datum raw, so the
 //fixture mirrors the wire encoding, and it stays valid across a future datum
 //shape evolution.
@@ -214,6 +215,8 @@ fn t_datum_data(update_auth: Option<AuthorizationMethod>) -> Data {
         builtin.i_data(3),
         builtin.i_data(3_600_000),
         builtin.i_data(144),
+        //pegin_refund_timeout_blocks, appended per [CFG-5]
+        builtin.i_data(720),
       ],
     )
   builtin.constr_data(

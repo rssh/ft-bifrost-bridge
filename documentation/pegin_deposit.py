@@ -33,6 +33,9 @@ Y_51 = bytes.fromhex("b1e15a532a4e816ec75af608256b0808e36fb7d22560605178850885e5
 # cannot refund.
 Y_FEDERATION = bytes.fromhex("b1e15a532a4e816ec75af608256b0808e36fb7d22560605178850885e53f2854")
 FEDERATION_CSV = 144
+# params.pegin_refund_timeout_blocks — PUBLISHED in the Config ([CFG-9]) for the same reason
+# as the two keys above: every SPO reconstructs the deposit address from it, so a value that
+# differs between them splits the federation silently.
 REFUND_TIMEOUT = 720
 # Spec constraint: the federation's window must open BEFORE the depositor's refund does,
 # or a depositor can take the deposit back while the federation is still recovering it.

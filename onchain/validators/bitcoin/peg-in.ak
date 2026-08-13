@@ -615,7 +615,8 @@ fn t_config_datum_data() -> Data {
   let update_auth_data: Data = Some(CardanoSignature { hash: #"aadd" })
   //params (ConfigDatum field 1): schedule, fee_rate_sat_per_vb, per_pegout_fee,
   //min_peg_out_fbtc, base_ban_duration_ms, max_faults_before_permanent,
-  //max_validity_window_ms, federation_csv_blocks. The schedule slot is a dummy
+  //max_validity_window_ms, federation_csv_blocks,
+  //pegin_refund_timeout_blocks. The schedule slot is a dummy
   //Int: no validator reads it, and a full ScheduleParams here would freeze its
   //shape into this fixture for no gain.
   let params_data: Data =
@@ -630,6 +631,8 @@ fn t_config_datum_data() -> Data {
         builtin.i_data(3),
         builtin.i_data(3_600_000),
         builtin.i_data(144),
+        //pegin_refund_timeout_blocks, appended per [CFG-5]
+        builtin.i_data(720),
       ],
     )
   builtin.constr_data(

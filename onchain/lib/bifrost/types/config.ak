@@ -99,6 +99,23 @@ pub type ConfigParams {
   //The CSV timeout baked into the federation Taproot leaves. A block count, so
   //[CFG-6] puts it here and not next to y_federation.
   federation_csv_blocks: Int,
+  //The CSV timeout of the peg-in tree's DEPOSITOR REFUND leaf, appended per
+  //[CFG-5]. It sits beside federation_csv_blocks because the two do the same
+  //job: both are block counts hashed into the peg-in Taproot, so both decide
+  //the deposit ADDRESS.
+  //
+  //Published because it must be UNANIMOUS ([CFG-9]). It was the last of the
+  //peg-in tree's four inputs left to each operator's own config, and the
+  //failure was silent: two SPOs on different values reconstruct different
+  //addresses from the same PegInRequest, freeze different peg-in sets, build
+  //different Treasury Movements, and never reach a signing threshold — with
+  //nothing in any log naming the cause. A default made it worse, since a node
+  //that simply never set the key diverged from one that did.
+  //
+  //Constraint, checked by every deriver rather than assumed: this must EXCEED
+  //federation_csv_blocks, so the federation's recovery window opens before the
+  //depositor can take the deposit back.
+  pegin_refund_timeout_blocks: Int,
 }
 
 //The tunable protocol schedule, E-relative slot values (spec §TM batches and
@@ -237,6 +254,10 @@ pub fn get_federation_csv_blocks(config_fields: List<Data>) -> Int {
   builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 7))
 }
 
+pub fn get_pegin_refund_timeout_blocks(config_fields: List<Data>) -> Int {
+  builtin.un_i_data(safe_list_at(get_params_fields(config_fields), 8))
+}
+
 //Pins every getter index to its ConfigDatum record field. The fixture is a
 //real ConfigDatum record, serialized with builtin.unconstr_fields, and each
 //getter's result is compared against the record field it must read. Every
@@ -267,6 +288,7 @@ test config_getters_match_datum_fields() {
       max_faults_before_permanent: 25,
       max_validity_window_ms: 26,
       federation_csv_blocks: 27,
+      pegin_refund_timeout_blocks: 28,
     }
   let datum =
     ConfigDatum {
@@ -317,5 +339,6 @@ test config_getters_match_datum_fields() {
     get_max_faults_before_permanent(fields) == params.max_faults_before_permanent,
     get_max_validity_window_ms(fields) == params.max_validity_window_ms,
     get_federation_csv_blocks(fields) == params.federation_csv_blocks,
+    get_pegin_refund_timeout_blocks(fields) == params.pegin_refund_timeout_blocks,
   }
 }

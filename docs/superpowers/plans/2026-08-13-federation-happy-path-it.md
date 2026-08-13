@@ -77,62 +77,23 @@ re-derive these:
 
 ---
 
-### Task 1: params[8] – bring ft and binocular up to heimdall's [CFG-9]
+### Task 1: params[8] – ALREADY DONE UPSTREAM (no work)
 
-Without params[8], heimdall main refuses every bridge binocular main deploys
-(`config params[8] (pegin_refund_timeout_blocks)` missing). Three
-repositories, spec first.
+Verified 2026-08-13 after pulling all three repos. Nothing to implement:
 
-**Files:**
-- Modify: `documentation/technical_documentation.md` (ft) – §Config datum
-  params record + §Parameter registry `refund_timeout` row
-- Modify: `onchain/lib/bifrost/types/config.ak` (ft) – append
-  `pegin_refund_timeout_blocks: Int` to `ConfigParams`, add
-  `get_pegin_refund_timeout_blocks` (index 8), extend
-  `config_getters_match_datum_fields`
-- Modify: `~/projects/lantr/binocular/src/main/scala/binocular/watchtower/ConfigTypes.scala`
-  – append the field to the `ConfigParams` mirror (and fix the stale rev-5.4
-  index comment at the top of the file)
-- Modify: binocular `reference.conf` + `BridgeConfig.scala` – add
-  `pegin-refund-timeout-blocks = 4320` default, written by `deploy-bridge`
-  into params[8]
-- Test: ft `aiken check`; binocular `ConfigDatumEncodingTest` + `ReferenceConfTest`
+- **ft** `6af0fc3` (PR #40, WI-084): spec [CFG-9] at
+  `technical_documentation.md:867/871/2071/5274`, `config.ak` `ConfigParams`
+  carries `pegin_refund_timeout_blocks`, `get_pegin_refund_timeout_blocks`
+  reads index 8, `config_getters_match_datum_fields` pins it (value 28), and
+  `0677f42` rebuilt `plutus.json` for the ninth params field.
+- **binocular** `de243d5` (merged `e60639a`): `ConfigTypes.ConfigParams` has
+  the ninth field, `deploy-bridge` writes it, `reference.conf` +
+  `BridgeConfig.peginRefundTimeoutBlocks` default **720**
+  (> `federation_csv_blocks` 144, so heimdall's [CFG-9] check passes), with
+  `ConfigDatumEncodingTest` / `ReferenceConfTest` updated.
+- **heimdall** `285687e` (WI-084): reads and enforces it.
 
-**Interfaces:**
-- Produces: params[8] on-chain; `BridgeConfig.peginRefundTimeoutBlocks: Int`
-  (binocular) consumed by Task 4's genesis and Task 6's depositor call.
-
-- [ ] **Step 1: ft spec** – in §Config datum, add `pegin_refund_timeout_blocks`
-  to the params record with a [CFG-9] check ID: "`config.ak` MUST publish the
-  refund-leaf CSV delay as `params[8]`. Constraint:
-  `pegin_refund_timeout_blocks > federation_csv_blocks`." Update the
-  §Parameter registry `refund_timeout` row (no longer "per-instance constant"
-  – home: Config params[8]; consumers: depositors, SPO address
-  reconstruction). Note heimdall already enforces both reads.
-- [ ] **Step 2: ft config.ak** – append the field + getter + pin it in
-  `config_getters_match_datum_fields`; `aiken check -D`; rebuild
-  `plutus.json` (`aiken build`).
-- [ ] **Step 3: Commit (ft)**
-
-```bash
-git add documentation/technical_documentation.md onchain
-git commit -m "feat(config): publish the peg-in refund timeout as params[8] (CFG-9)"
-```
-
-- [ ] **Step 4: binocular mirror** – failing test first: extend
-  `ConfigDatumEncodingTest` with the 9-field params round-trip and a
-  heimdall-shape assertion (params[8] present, Int); then append the field to
-  `ConfigTypes.ConfigParams`, thread it through `deploy-bridge`'s datum
-  construction from the new `BridgeConfig` key, update `reference.conf`
-  (default 4320, env override `BIFROST_PEGIN_REFUND_TIMEOUT_BLOCKS`).
-- [ ] **Step 5: binocular full suite** – cache-reset verify:
-  `sbt shutdown && pkill -f sbt-launch && sbt cleanFull && sbt test`.
-- [ ] **Step 6: Commit (binocular)**
-
-```bash
-git add src/main/scala/binocular/watchtower/ConfigTypes.scala src/main/scala/binocular/watchtower/BridgeConfig.scala src/main/resources/reference.conf src/test/scala/binocular
-git commit -m "feat(config): write pegin_refund_timeout_blocks as params[8] (CFG-9)"
-```
+Start execution at Task 2.
 
 ---
 

@@ -94,6 +94,22 @@ re-derive these:
 - WI-083: heimdall's `bootstrap-treasury-info` / `bootstrap-registry` /
   `bootstrap-ban-list` are LEGACY; binocular `deploy-bridge` is the genesis
   authority (it mints all three federation NFTs in the federation tx).
+- **WI-086 (heimdall `f59c621`): heimdall NEVER broadcasts to Bitcoin.** The signed TM
+  travels inside the UnconfirmedTm record posted to Cardano, and the watchtower
+  relays it - which is what the scenario's step 5 already assumed, now enforced.
+  Consequences for the SPO TOMLs in Task 5: do NOT set `bitcoin.submit` (it is
+  REFUSED now, not ignored), and `--broadcast` is gone from `treasury-self-send`
+  and `federation-spend`.
+- Two more devnet blockers fixed upstream while this plan was being written, both
+  found by Ruslan running the WI-080 peg-in sweep against a local devnet:
+  `cecf5b0` (the singleton holder lookup asked for `page=1`; Blockfrost numbers
+  from 1 and yaci-store from 0, so on a devnet it read the empty second page and
+  reported no singleton) and binocular `5bab3e1` (three values a short-epoch
+  devnet rejects, including a one-hour `pegin-request` TTL that lands past the
+  node's era-forecast horizon and fails as `TimeTranslationPastHorizon`).
+  **Coordinate before writing Task 5**: `cecf5b0`'s message says it was "the last
+  thing between a parsed PegInRequest and a Treasury Movement", so that half of
+  this scenario already runs by hand, and the devnet TOMLs for it exist somewhere.
 - WI-084 ([CFG-9]): heimdall READS `params[8] = pegin_refund_timeout_blocks`
   from the Config and REFUSES a datum without it or with
   `pegin_refund_timeout_blocks <= federation_csv_blocks`. ft's `config.ak`

@@ -7,12 +7,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
-# --bins: the scenarios also need register_pool (devnet stake pools).
+# --bins: the scenarios also need register_pool (devnet stake pools) and
+# depositor (scenario 5's peg-in deposit).
 RUN cargo build --release --locked --bins
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+# Every binary the build produces. They were built anyway, and a missing one
+# surfaces as a docker exec failure ("executable file not found in $PATH") in the
+# middle of a scenario rather than as a build error.
 COPY --from=build /src/target/release/heimdall /usr/local/bin/heimdall
 COPY --from=build /src/target/release/register_pool /usr/local/bin/register_pool
+COPY --from=build /src/target/release/depositor /usr/local/bin/depositor
 ENTRYPOINT ["heimdall"]

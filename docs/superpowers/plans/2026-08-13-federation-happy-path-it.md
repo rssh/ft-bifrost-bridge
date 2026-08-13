@@ -110,6 +110,18 @@ re-derive these:
   **Coordinate before writing Task 5**: `cecf5b0`'s message says it was "the last
   thing between a parsed PegInRequest and a Treasury Movement", so that half of
   this scenario already runs by hand, and the devnet TOMLs for it exist somewhere.
+- **WI-070 (heimdall `64bc2f9`): nine `[cardano]` keys are DELETED and now
+  REFUSED at config load**, each naming the Config field that replaced it:
+  `pegin_script_address` / `pegin_policy_id` (#6), `pegout_script_address` (#7),
+  `bridged_token_unit` (#2), `cpo_policy_id` (#4), `treasury_address` /
+  `treasury_policy_id` (#5), `treasury_asset_name`, `treasury_info_asset_name`.
+  `ConfigParams::bridge_contracts` derives all of them from one Config read; the
+  network tag is the only local input left. Task 5's `HeimdallToml` MUST NOT emit
+  any of these - a config carrying one does not warn, it fails to load. Preflight
+  is eight steps now, not nine. Also: `heimdall demo` no longer has a fixture
+  route on a live chain - it runs either against a deployed bridge (every
+  identifier the Config's) or on the mock, which is exactly what this scenario
+  provides.
 - WI-084 ([CFG-9]): heimdall READS `params[8] = pegin_refund_timeout_blocks`
   from the Config and REFUSES a datum without it or with
   `pegin_refund_timeout_blocks <= federation_csv_blocks`. ft's `config.ak`

@@ -26,11 +26,10 @@ network = "regtest"
 rpc_url = "http://bitcoind:18443"
 rpc_user = "bifrost"
 rpc_pass = "bifrost"
-# DEV-ONLY direct broadcast: production SPOs run no Bitcoin node and the
-# binocular watchtower relays the TM off the posted UnconfirmedTm record. Here
-# the sweep's own broadcast is what proves the deposit is spendable, so the
-# scenario asserts against regtest directly rather than through the relay.
-submit = true
+# rpc_url/user/pass are for the DEPOSITOR, the one component that talks to
+# bitcoind (it reads the UTxO set to pick funding inputs). heimdall itself never
+# sends a transaction to Bitcoin — `bitcoin.submit` is gone and now REFUSED — so
+# the scenario takes the signed hex `sweep-pegins` prints and sends it itself.
 # Both are Config values on a deployed bridge (params[7] and params[8]) and
 # heimdall takes the PUBLISHED one, failing loudly if a local copy disagrees.
 # They are set here only because step 2 runs BEFORE the bridge exists: deriving

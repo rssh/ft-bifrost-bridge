@@ -340,8 +340,27 @@ hs sweep-pegins "${CFG[@]}" \
 TM_BTC_TX=$(sed -n '/Treasury Movement (sweep peg-ins)/,$p' "$sweep_log" |
   grep -oE '[0-9a-f]{64}' | head -1)
 [ -n "$TM_BTC_TX" ] || die "no TM txid in $sweep_log"
+
+# heimdall posted the TM to CARDANO and stopped: it never sends a transaction to
+# Bitcoin (WI-086). Getting those bytes onto Bitcoin is somebody else's job, so
+# the scenario does it — the signed hex is printed unconditionally, above the
+# --broadcast gate.
+#
+# In production that job belongs to `binocular relay`, which reads the posted
+# record and broadcasts it. Sending the hex here proves the narrower thing this
+# scenario is about: that the SIGNATURE is valid, i.e. the taproot tweak the
+# sweeper computed from the beacon's Q_auth matches the key the depositor paid
+# to. Relaying from the record would additionally prove the record is relayable,
+# and is the fidelity upgrade tracked on WI-086 — it needs a daemon whose failure
+# is invisible from here, which cost this scenario an afternoon once already.
+TM_HEX=$(extract "$sweep_log" 'hex:\s+[0-9a-f]+' | grep -oE '[0-9a-f]{64,}')
+sent=$(btc sendrawtransaction "$TM_HEX") ||
+  die "bitcoind refused the signed TM — if it is 'non-mandatory-script-verify-flag', the \
+taproot tweak is wrong, which is exactly what this scenario exists to catch"
+[ "$sent" = "$TM_BTC_TX" ] ||
+  die "bitcoind accepted $sent but heimdall built $TM_BTC_TX"
 btc_mine 1
-log "  TM btc tx $TM_BTC_TX"
+log "  TM btc tx $TM_BTC_TX (posted to Cardano by heimdall, sent to Bitcoin by this script)"
 
 log "step 14: assert — the deposit is SPENT on Bitcoin, by that TM"
 spent=$(btc gettxout "$DEPOSIT_TX" 0 2>/dev/null || true)

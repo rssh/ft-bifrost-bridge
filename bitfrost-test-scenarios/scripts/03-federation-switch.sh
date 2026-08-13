@@ -47,13 +47,22 @@ btc_mine $((CSV + 1))
 
 log "step 4: federation script-path spend of the treasury (y_fed CSV leaf)"
 sp_log="$LOGS/scenario3-fed-spend.log"
-hd federation-spend "${HD_CFG[@]}" --outpoint "$TX:$VOUT" --amount-sat "$AMT" --broadcast 2>&1 |
+hd federation-spend "${HD_CFG[@]}" --outpoint "$TX:$VOUT" --amount-sat "$AMT" 2>&1 |
   tee "$sp_log" >/dev/null
-# Check acceptance first, so a rejection (e.g. min-relay-fee: bump
-# bitcoin.fee_rate_sat_per_vb) surfaces the node's own words, not a bare
-# extraction failure.
-grep -q 'broadcast OK' "$sp_log" || { cat "$sp_log"; die "federation spend was not accepted by bitcoind — see $sp_log"; }
 SPEND_TX=$(extract "$sp_log" 'federation-spend txid : [0-9a-f]{64}' | grep -oE '[0-9a-f]{64}$')
+# heimdall SIGNS the recovery spend and stops there — it never sends a transaction
+# to Bitcoin (WI-086), and for this path that is the right shape: whoever holds the
+# federation key need not be running a node beside heimdall. Sending it is this
+# script's job, standing in for that holder.
+#
+# The send is also the assertion. bitcoind's own words are the diagnosis for a
+# rejection (min-relay-fee: bump bitcoin.fee_rate_sat_per_vb; a script-verify
+# failure: the CSV leaf or control block is wrong), which is why the raw hex goes
+# in rather than a pre-blessed txid.
+SPEND_HEX=$(extract "$sp_log" 'raw tx : [0-9a-f]+' | grep -oE '[0-9a-f]{64,}')
+sent=$(btc sendrawtransaction "$SPEND_HEX") ||
+  { cat "$sp_log"; die "federation spend was not accepted by bitcoind — see $sp_log"; }
+[ "$sent" = "$SPEND_TX" ] || die "bitcoind accepted $sent but heimdall built $SPEND_TX"
 btc_mine 1
 
 # Assert Bitcoin accepted the emergency path: the input spends the treasury via

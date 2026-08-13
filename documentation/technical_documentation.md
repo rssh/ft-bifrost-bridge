@@ -4768,9 +4768,14 @@ Operational-params floor** at the batch snapshot slot; its net payout
 (the request is not yet valid) OR `datum.created + peg_out_cancel_timeout_ms − now < margin`
 (too close to its own Cancel deadline — a heimdall-configured value, default 7 days, bounding the
 signed-but-not-yet-confirmed race: a TM that includes a peg-out too close to its cancel window
-could confirm just after the owner cancels, stranding the payment). The floor, `min_peg_out_fbtc`,
-and the freshness margin are read at the batch snapshot slot, so every SPO computes the identical
-skip set. The two `por_id` conditions are what make fulfillment **once-only**: the trie insert is
+could confirm just after the owner cancels, stranding the payment). The floor and `min_peg_out_fbtc` are read at the batch snapshot slot, so
+every SPO computes the identical skip set. The freshness margin is NOT a Config field and is not
+read there: it is a protocol constant compiled into heimdall, which is what makes it identical
+across every node running a release. Publishing it was considered and rejected — nothing outside
+the SPO's own TM builder reads it, `peg-out.ak` only assumes a margin exists rather than checking
+one, and two SPOs disagreeing would cost liveness (the FROST round cannot converge, so nothing is
+paid) rather than safety. A datum field would buy uniformity per bridge at the price of a config
+hash move, for a value no other party consumes. The two `por_id` conditions are what make fulfillment **once-only**: the trie insert is
 idempotent, so a second payment for a `por_id` the trie already holds — whether recorded by an
 earlier TM or repeated within this batch — moves treasury BTC that no root change accounts for,
 and is provable by nobody. They are consensus conditions like the rest: an SPO whose trie
@@ -5268,7 +5273,7 @@ Bifrost's watchtower design relies on a minimal trust assumption: only one hones
 | `peg_out_cancel_timeout_ms` | `peg-out.ak` validator constant (`2_592_000_000`, 30 days) | fixed per deployed script — changeable only by a `peg-out.ak` swap via Config Update (field 5) | *Cancel PegOut request* ([CXL-7]) |
 | `created` (PIR) | each `PegInDatum` | **mint-pinned** to the mint tx's validity upper bound ([CLR-7]) — not requester-set, unlike the POR one | *Close PegInRequest*'s never-swept timeout ([CLR-5]) |
 | `peg_in_close_timeout_ms` | `peg-in.ak` validator constant (`2_592_000_000`, 30 days) | fixed per deployed script — changeable only by a `peg-in.ak` swap via Config Update | *Close PegInRequest* ([CLR-5]) |
-| fulfillment freshness margin (default 7 days) | heimdall config (off-chain, not on-chain) | operator-tunable, no Config field | SPO TM builder's skip rule |
+| fulfillment freshness margin (7 days) | `heimdall`'s `PEG_OUT_FRESHNESS_MARGIN_MS` (off-chain, not on-chain) | protocol constant, NOT operator-tunable and no Config field — it is a TM selection rule, so a per-operator value would make co-signers freeze different sets | SPO TM builder's skip rule |
 | `y_federation` | Config **#11** | governance Update ([CFG-6]) | address derivation; CSV leaves; the Update-Y federation branch ([UY-5]), which reads it from the Config reference input |
 | `federation_csv_blocks` | Config **#1** `params[7]` | governance Update ([CFG-6]) | address derivation; CSV leaves. No on-chain reader |
 | `refund_timeout` | baked into each deposit's refund leaf | Config `params.pegin_refund_timeout_blocks` ([CFG-9]), `> federation_csv_blocks` | depositors; SPO address reconstruction |

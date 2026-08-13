@@ -61,9 +61,28 @@ re-derive these:
 - `heimdall demo --deterministic` runs the HTTP DKG reproducibly:
   `scripts/dkz/README.md` documents all three instances converging on a FIXED
   group key, run after run, and the run continuing Sign -> Submit with the
-  LEADER posting the FROST-signed TM (proven on preprod). Genesis choreography
-  is therefore **DkgRehearsal** (Task 5); the `HeimdallFix` branch is retired
-  and Task 5a with it.
+  LEADER posting the FROST-signed TM (proven on preprod). The `HeimdallFix`
+  branch is retired and Task 5a with it.
+- **No DKG rehearsal is needed at all** (heimdall `4e34da4`, PR #50).
+  `frost-treasury` now reproduces the deterministic demo DKG when given no
+  `--frost-key`, and prints the group key, the leaf key and the treasury
+  address together. Measured 2026-08-13 against `heimdall.localdkg.toml`:
+
+      FROST group key (x-only): b1e15a53...e53f2854
+      Treasury address: tb1ptt4u8v96nqdht88dn0twemh8q88ysvjukw7cytwjc8df0cfws4jsxcxdn5
+
+  That key is BYTE-IDENTICAL to the one `scripts/dkz/demo-spo-{1,2,3}.sh`
+  document the 3-instance HTTP DKG converging on, which is the equality the
+  retired spike existed to establish: the one-process derivation and the
+  HTTP ceremony agree, for the same (seed, min_signers, max_signers). So
+  `SpoRing.rehearseGroupKey` collapses from "spawn three processes on a mock
+  chain and parse their logs" into one command invocation that also yields the
+  address genesis must fund.
+- The same PR fixed `frost-treasury` hardcoding `y_federation = Y_51`, which
+  is true ONLY of the genesis tree. The scenario deploys with
+  `y_federation = groupKey`, so the genesis default is the correct one here -
+  but pass `--y-federation` explicitly, because the collapse is a property of
+  this deployment, not of the command.
 - The collapsed `y_federation = Y_51` convention is legal (2180e5b handles
   bridges "still using the collapsed Y_fed = Y_51 convention"); the
   "bad pair is an error" rule is the CSV ordering
@@ -401,11 +420,13 @@ class SpoDkgTest extends AnyFunSuite with YaciDevKit {
 ```
 
 - [ ] **Step 2: Run to verify it fails** – compile failure, then stage-wise.
-- [ ] **Step 3: Implement** – `rehearseGroupKey` spawns 3
-  `heimdall demo --config <localdkg-style toml> --index i --deterministic`
-  processes on the mock chain, `awaitLogLine` for the group-key line (the
-  `PublishKeys: group_key = <hex>` form documented in `scripts/dkz/README.md`;
-  confirm against a live run), kills them, parses the key. `start` renders TOMLs (real
+- [ ] **Step 3: Implement** – `rehearseGroupKey` is one invocation:
+  `heimdall frost-treasury --config <toml>` with no `--frost-key`, parsing
+  `FROST group key (x-only): <hex>` and `Treasury address: <addr>` from its
+  stdout. No processes to spawn, no mock chain, no log tailing - the key it
+  prints is the one the HTTP DKG converges on (verified above). Rename it
+  `SpoRing.groupKeyAndTreasury` to stop implying a ceremony that no longer
+  happens. `start` renders TOMLs (real
   chain config), runs registration, spawns the three `demo --deterministic`
   processes named faith/grace/hal with logs in `bridge.logDir`.
 - [ ] **Step 4: Run to verify it passes** – `sbt "it/testOnly *SpoDkgTest"`.

@@ -28,8 +28,13 @@ yaci-store Blockfrost-compatible API.
 
 - Work in the REAL clones. Never commit inside `offchain/*` submodule
   checkouts; after landing, bump both gitlinks in ft-bifrost-bridge.
-- binocular verification: `sbt shutdown && pkill -f sbt-launch && sbt cleanFull`
-  before trusting any result (three cache layers lie otherwise).
+- binocular verification: **`sbt testFull`**, not `sbt test`. Plain `test`
+  under-reports and still passes (measured: 446 vs the true 547), which is the
+  stale-cache symptom binocular's CLAUDE.md describes. `testFull` gives the
+  true count in ~20 s. Fall back to the full reset
+  (`sbt shutdown && pkill -f sbt-launch && sbt cleanFull && sbt test`) only
+  when blueprint pins or other classpath resources changed - that is the one
+  thing which clears the server's open jar.
 - heimdall verification: `cargo test` AND `cargo clippy --all-targets`
   (needs `nix develop`).
 - Commit messages: conventional style of each repo; NEVER add a
@@ -643,8 +648,7 @@ class FederationHappyPathTest extends AnyFunSuite with Matchers with YaciDevKit 
   Grace and Hal before the TM leg in a scratch copy; verify the failure names
   the step (`expectUnconfirmedTm`) and dumps actor logs. Do not commit the
   scratch; record the observed output in the commit message body.
-- [ ] **Step 4: Full verification** – binocular:
-  `sbt shutdown && pkill -f sbt-launch && sbt cleanFull && sbt test` then the
+- [ ] **Step 4: Full verification** – binocular: `sbt testFull` then the
   it suite; heimdall (if touched): `cargo test && cargo clippy --all-targets`.
 - [ ] **Step 5: Commit (binocular)**
 

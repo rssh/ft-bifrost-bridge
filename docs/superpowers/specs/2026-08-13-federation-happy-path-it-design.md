@@ -40,6 +40,40 @@ assumptions:
 - scalus-testkit's `Party` enum (Alice..Wendy) provides funded devnet
   identities with `account()`, `address()`, `signer()`.
 
+## Retarget: the federation key comes from a real ceremony (2026-08-13)
+
+heimdall gained `federation-dkg` (WI-087) after this spec was written: a t-of-n
+FROST ceremony among the federation members, run before genesis, reading no
+chain, producing `federation_setup_Y` and a `0600` share per member. The happy
+path retargets onto it, replacing the collapsed `Y_fed = Y_51` convention.
+
+**What the retarget can and cannot be.** `sweep-pegins` FROST-signs with
+`run_demo_dkg` - all shares held locally - not with ceremony shares, and the
+epoch loop only exercises `CascadeLevel::Quorum51` (the federation cascade is an
+explicit TODO in `epoch/signing.rs`). So no code path today sweeps peg-ins under
+a federation ceremony key, and "the federation signs the TM" is not
+implementable without new heimdall work.
+
+What IS implementable, and is what this scenario now does:
+
+- Faith, Grace and Hal run `federation-dkg` and agree `federation_setup_Y`.
+- Genesis publishes it as Config #11, so it is the **recovery-leaf** key of both
+  Taproot trees - the treasury's and every peg-in deposit's.
+- The treasury address is `P2TR(internal = Y_51, leaf = federation_setup_Y,
+  csv)`, where `Y_51` is the roster's demo-DKG key.
+- `sweep-pegins` key-path-signs the TM with `Y_51`. A key-path spend never
+  touches the recovery leaf, so the ceremony key is not needed to sign.
+
+The ceremony is still load-bearing, and that is the point: it is an INPUT to
+every address on the bridge. A wrong `federation_setup_Y` produces a well-formed
+P2TR that holds nothing - the WI-074/WI-081 failure - so the scenario fails
+loudly if the ceremony and genesis disagree.
+
+This is the Phase-2 tree shape (two distinct keys) rather than Phase-1's
+collapsed one. A scenario in which the federation actually signs - the CSV
+script-path recovery spend - needs the signing cascade first, and is a
+follow-up, not this test.
+
 ## Scope
 
 In scope: the single happy path above, plus the DSL and lifecycle

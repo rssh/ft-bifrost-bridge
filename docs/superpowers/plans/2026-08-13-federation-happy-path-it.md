@@ -290,6 +290,22 @@ default-derived via that call), send BTC, mine, `bootstrap-bridge-state`;
 `deploy-script-refs`; `register-bridge-creds`. Teardown: stop bitcoind, keep
 container, delete temp dirs on success only.
 
+**Resolved APIs** (verified against the jars, 2026-08-13 - do not re-derive):
+
+- `YaciDevKit.container()` returns `com.bloxbean.cardano.yaci.test.YaciCardanoContainer`,
+  which exposes `getYaciStoreApiUrl()` and `getLocalClusterApiUrl()` - exactly
+  the two values `CardanoConfig` needs.
+- binocular's commands reach the devnet through
+  `CardanoConfig(network = "testnet", backend = "yaci", yaciStoreUrl = ...,
+  yaciAdminUrl = ...)`; `createBlockchainProvider()` routes `"yaci"` to
+  `localYaci(yaciStoreUrl, yaciAdminUrl)`. No Blockfrost project id involved.
+  (heimdall, by contrast, needs the Blockfrost-compatible URL + a project id -
+  see `application-devnet.conf`, which is a working example of both halves.)
+- The funded devnet wallet is the standard yaci mnemonic; `WalletConfig` takes
+  it directly. `scalus.testing.kit.Party` accounts are the USER wallets.
+- `DeployBridgeCommand(onDeployed = collector)` (Task 3) hands back the
+  `DeployedBridge` - no stdout scraping.
+
 - [ ] **Step 1: Write the failing smoke test**
 
 ```scala

@@ -128,19 +128,30 @@ wait_store_api() {
 # A DIFFERENT account per call, round-robin: consecutive transfers out of ONE
 # account race on its own unconfirmed change, and each of ours funds a distinct
 # one-shot outref, so they must not collapse into a chain.
+# The accounts hold 10,000 tADA each and are NOT refilled, so a re-run against a
+# long-lived devnet drains them one by one — hence advancing past an account that
+# answers "Not enough funds" rather than failing the scenario on it.
+YACI_FUND_ACCOUNTS=${YACI_FUND_ACCOUNTS:-20}
 YACI_FUND_ACCOUNT=${YACI_FUND_ACCOUNT:-0}
 yaci_topup() {
-  local addr="$1" ada="$2" body out
-  body=$(printf '{"accountId": "%s", "receiverAddress": "%s", "amounts": [{"unit": "lovelace", "quantity": "%s"}]}' \
-    "$YACI_FUND_ACCOUNT" "$addr" "$((ada * 1000000))")
-  out=$(curl -sf -X POST "$WALLET_API/transfer" -H 'Content-Type: application/json' -d "$body") ||
-    die "funding $addr from devkit account $YACI_FUND_ACCOUNT failed ($WALLET_API/transfer)"
-  case "$out" in
-  *'"success":true'*) ;;
-  *) die "funding $addr from devkit account $YACI_FUND_ACCOUNT was refused: $out" ;;
-  esac
-  log "funded $addr with $ada tADA (devkit account $YACI_FUND_ACCOUNT)"
-  YACI_FUND_ACCOUNT=$(((YACI_FUND_ACCOUNT + 1) % 20))
+  local addr="$1" ada="$2" body out i
+  for i in $(seq "$YACI_FUND_ACCOUNTS"); do
+    body=$(printf '{"accountId": "%s", "receiverAddress": "%s", "amounts": [{"unit": "lovelace", "quantity": "%s"}]}' \
+      "$YACI_FUND_ACCOUNT" "$addr" "$((ada * 1000000))")
+    out=$(curl -sf -X POST "$WALLET_API/transfer" -H 'Content-Type: application/json' -d "$body") ||
+      die "funding $addr from devkit account $YACI_FUND_ACCOUNT failed ($WALLET_API/transfer)"
+    local used="$YACI_FUND_ACCOUNT"
+    YACI_FUND_ACCOUNT=$(((YACI_FUND_ACCOUNT + 1) % YACI_FUND_ACCOUNTS))
+    case "$out" in
+    *'"success":true'*)
+      log "funded $addr with $ada tADA (devkit account $used)"
+      return 0
+      ;;
+    *'Not enough funds'*) ;; # drained by an earlier run — try the next account
+    *) die "funding $addr from devkit account $used was refused: $out" ;;
+    esac
+  done
+  die "all $YACI_FUND_ACCOUNTS devkit accounts are drained — recreate the devnet (see 00-lib.sh::yaci_topup)"
 }
 
 # First UTxO of an address as TX:IDX (store API, blockfrost field names).

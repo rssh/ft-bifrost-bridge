@@ -42,6 +42,10 @@ pegin_refund_timeout_blocks = @PEGIN_REFUND_TIMEOUT_BLOCKS@
 [cardano]
 blockfrost_url = "http://yaci-devkit:8080/api/v1/"
 blockfrost_project_id = "devnet"
+# Mandatory alongside blockfrost_url: the project-id prefix identifies the network
+# only on hosted blockfrost.io, and a local backend ignores the project id
+# entirely. The devnet is magic 42, i.e. a testnet.
+network = "testnet"
 stake_source = "yaci_store"
 # The short-epoch devnet's era-forecast horizon is only tens of slots ahead, so
 # the production +1800s validTo lands past it (TimeTranslationPastHorizon at

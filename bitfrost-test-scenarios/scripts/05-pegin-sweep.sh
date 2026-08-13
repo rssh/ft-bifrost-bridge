@@ -20,6 +20,32 @@
 . "$(dirname "$0")/00-lib.sh"
 check_pins
 
+# Longer epochs than the DKG scenarios, and the number is bounded from BOTH sides.
+#
+# From below: a transaction is unsubmittable if its validity END lies past the
+# node's era-forecast horizon, which is only guaranteed to reach one SAFE ZONE
+# ahead — half an epoch here (`eraSafeZone = StandardSafeZone 90` for 180-slot
+# epochs). So the epoch must exceed twice the longest validity window in play,
+# which is BitcoinValidator.MaxValidityWindow, 10 minutes, on every oracle
+# transaction. Get it wrong and the failure is TimeTranslationPastHorizon: a wall
+# of ouroboros-consensus call stack naming a future slot, which reads like a clock
+# problem and is not one.
+#
+# From above: the companion-mode bootstrap has Yano produce the whole chain and
+# the Haskell node then REPLAY it block by block. At 10800 the replay never
+# finished and block production simply stopped — a devnet that answers queries and
+# confirms nothing.
+#
+# 1200 satisfies both. `pegin-request`'s own TTL is a config value rather than a
+# constant precisely so it can fit under this (see binocular
+# bridge.pegin-request-ttl-seconds). Nothing here needs SHORT epochs: this
+# scenario never waits for stake to activate.
+#
+# Assigned unconditionally, and from a scenario-specific variable: 00-lib.sh has
+# already defaulted DEVNET_EPOCH_SLOTS by the time this line runs, so a
+# `${DEVNET_EPOCH_SLOTS:-1200}` here would silently keep its 180.
+DEVNET_EPOCH_SLOTS=${SCENARIO5_EPOCH_SLOTS:-1200}
+
 CFG=(--config /etc/heimdall/heimdall.toml)
 # x-only pubkey of bitcoin.y_fed_seed_hex (heimdall's default fe×32). Config #11
 # on this deployment, and the key in the recovery leaf of BOTH taproot trees.
@@ -86,8 +112,12 @@ bn info 2>&1 | tee "$bn_addr_log" >/dev/null || true
 BN_ADDR=$(extract "$bn_addr_log" 'addr_test1[a-z0-9]+')
 log "  binocular wallet $BN_ADDR"
 log "  heimdall wallet  $HD_ADDR"
-for _ in 1 2 3 4 5 6; do yaci_topup "$BN_ADDR" 5000; done
-for _ in 1 2; do yaci_topup "$HD_ADDR" 5000; done
+# 1000 tADA a piece: the devkit's 20 accounts hold 10,000 each and are never
+# refilled, so an over-generous run drains the devnet in a handful of iterations
+# — which then fails at step 1 rather than anywhere informative. The largest
+# single need is a reference-script UTxO, tens of ADA.
+for _ in 1 2 3 4 5 6; do yaci_topup "$BN_ADDR" 1000; done
+for _ in 1 2; do yaci_topup "$HD_ADDR" 1000; done
 wait_utxo_count "$BN_ADDR" 6
 wait_utxo_count "$HD_ADDR" 2
 
@@ -123,10 +153,18 @@ log "step 4: initialize the Bitcoin oracle on regtest"
 # buried: the oracle's confirmed root is what `pegin-request` proves inclusion
 # against, and a root anchored at the very tip has nothing mature under it.
 BTC_TIP=$(btc getblockcount)
+ORACLE_START_HEIGHT=$((BTC_TIP - 10))
+# Exported BEFORE init and kept for every later command: it is the lower bound of
+# the confirmed-blocks MPF, and each rebuild of that MPF walks from it.
+bn_env ORACLE_START_HEIGHT "$ORACLE_START_HEIGHT"
 init_log="$LOGS/oracle-init.log"
-bn init --start-block $((BTC_TIP - 10)) --confirmed-until $((BTC_TIP - 5)) 2>&1 |
+bn init --start-block "$ORACLE_START_HEIGHT" --confirmed-until $((BTC_TIP - 5)) 2>&1 |
   tee "$init_log" >/dev/null
-ORACLE_ONE_SHOT=$(bn_field "$init_log" 'One-shot')
+# Normalized to TXHASH#INDEX whatever `init` printed: older builds rendered
+# scalus's TransactionInput toString here, and the difference only surfaces one
+# command later as "Invalid TxOutRef format".
+ORACLE_ONE_SHOT=$(bn_field "$init_log" 'One-shot' |
+  sed -E 's/.*"?([0-9a-f]{64})"?[^0-9]*([0-9]+).*/\1#\2/')
 ORACLE_OWNER_PKH=$(bn_field "$init_log" 'Owner PKH')
 bn_env ORACLE_TX_OUT_REF "$ORACLE_ONE_SHOT"
 bn_env ORACLE_OWNER_PKH "$ORACLE_OWNER_PKH"
@@ -138,6 +176,8 @@ bn_env INITIAL_BTC_TREASURY_AMOUNT_SAT "$TREASURY_FUND_SAT"
 bn_env BIFROST_Y_FEDERATION_HEX "$Y_FED_XONLY"
 bn_env BIFROST_FEDERATION_CSV_BLOCKS "$FEDERATION_CSV_BLOCKS"
 bn_env BIFROST_PEGIN_REFUND_TIMEOUT_BLOCKS "$PEGIN_REFUND_TIMEOUT_BLOCKS"
+# Well under the ~600 s the 1200-slot epoch guarantees ahead (see DEVNET_EPOCH_SLOTS).
+bn_env BIFROST_PEGIN_REQUEST_TTL_SECONDS 300
 bn_env BIFROST_BASE_BAN_DURATION_MS "$BAN_BASE_DURATION_MS"
 bn_env BIFROST_MAX_FAULTS_BEFORE_PERMANENT "$BAN_MAX_FAULTS_BEFORE_PERMANENT"
 bn_env BIFROST_MAX_VALIDITY_WINDOW_MS "$BAN_MAX_VALIDITY_WINDOW_MS"
@@ -195,16 +235,39 @@ log "step 10: build the depositor's 35-byte-beacon deposit"
 # The depositor is the one actor that cannot read the Config, so every input to
 # the deposit ADDRESS is passed explicitly. A wrong one here produces a
 # well-formed P2TR that no sweep can ever find (WI-074).
-[ -f keys/depositor.wif ] || {
-  btc -rpcwallet=bench createwallet depositor >/dev/null 2>&1 || true
-  btc loadwallet depositor >/dev/null 2>&1 || true
-  DEP_ADDR=$(btc -rpcwallet=depositor getnewaddress "" bech32)
-  btc -rpcwallet=depositor dumpprivkey "$DEP_ADDR" >keys/depositor.wif
+# The key is generated HERE, not by bitcoind: `dumpprivkey` works only on legacy
+# wallets, and Bitcoin Core has created descriptor wallets by default since v23
+# (it answers "Only legacy wallets are supported by this command"). A fixed
+# devnet-only secret keeps the deposit address stable across runs, which makes a
+# failed sweep re-inspectable.
+# -s, not -f: a redirect that fails still leaves a zero-byte file behind, and the
+# next run would then skip generation and hand bitcoind an empty key.
+[ -s keys/depositor.wif ] || {
+  python3 - <<'PY' >keys/depositor.wif
+import hashlib
+# WIF, compressed, testnet/regtest prefix 0xEF. Devnet-only secret, 0x77 x32.
+payload = b"\xef" + b"\x77" * 32 + b"\x01"
+raw = payload + hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+n = int.from_bytes(raw, "big")
+out = ""
+while n:
+    n, r = divmod(n, 58)
+    out = alphabet[r] + out
+print("1" * (len(raw) - len(raw.lstrip(b"\x00"))) + out, end="")
+PY
   chmod 600 keys/depositor.wif
-  btc -rpcwallet=bench sendtoaddress "$DEP_ADDR" \
-    "$(python3 -c "print('%.8f' % (($DEPOSIT_SAT + $DEPOSIT_FEE_SAT + 50000)/1e8))")" >/dev/null
-  btc_mine 1
 }
+# Its P2WPKH address, from the node rather than re-implemented here — a mismatch
+# between the address funded and the one the depositor spends from would surface
+# as "no UTXOs" with no hint that the derivation was the problem.
+DEP_DESC=$(btc getdescriptorinfo "wpkh($(cat keys/depositor.wif))" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["descriptor"])')
+DEP_ADDR=$(btc deriveaddresses "$DEP_DESC" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0])')
+log "  depositor $DEP_ADDR"
+btc -rpcwallet=bench sendtoaddress "$DEP_ADDR" \
+  "$(python3 -c "print('%.8f' % (($DEPOSIT_SAT + $DEPOSIT_FEE_SAT + 50000)/1e8))")" >/dev/null
+btc_mine 1
 dep_log="$LOGS/depositor.log"
 hs_depositor "${CFG[@]}" \
   --frost-key "$Y51" \
@@ -214,7 +277,9 @@ hs_depositor "${CFG[@]}" \
   --depositor-wif-file /keys/depositor.wif \
   --deposit-amount-sat "$DEPOSIT_SAT" --fee-sat "$DEPOSIT_FEE_SAT" \
   --submit 2>&1 | tee "$dep_log" >/dev/null
-DEPOSIT_TX=$(extract "$dep_log" 'txid: [0-9a-f]{64}' | grep -oE '[0-9a-f]{64}')
+# `txid = …` from the broadcast, or `txid: …` from the depositor's own line — the
+# latter is logged below the depositor target's level, so it is not always there.
+DEPOSIT_TX=$(extract "$dep_log" 'txid[ :=]+[0-9a-f]{64}' | grep -oE '[0-9a-f]{64}')
 btc_mine 1
 # The beacon is output 1: OP_RETURN PUSH35 "BFR" || Q_auth. Assert its WIDTH here,
 # where a 67-byte two-key beacon would still be well-formed Bitcoin — the on-chain
@@ -234,27 +299,32 @@ log "step 11: mature the deposit into the oracle's confirmed root"
 # the block must be maturation-confirmations deep AND have aged challenge-aging
 # inside the oracle. Regtest blocks are free; the aging is wall clock.
 btc_mine 5
-ORACLE_RUN_CID=$(docker compose run --rm --no-deps -d "${BN_ENV[@]}" bitfrost \
-  --config /etc/binocular.conf run)
-# Detached, so it outlives this shell unless we say otherwise. Stopped on ANY
-# exit — a scenario that dies at step 12 must not leave an oracle daemon writing
-# to the devnet behind it.
-trap 'docker rm -f "$ORACLE_RUN_CID" >/dev/null 2>&1 || true' EXIT
-log "  oracle daemon $ORACLE_RUN_CID advancing the confirmed root"
 
 log "step 12: mint the PegInRequest on Cardano"
+# The oracle is driven SYNCHRONOUSLY with `update-oracle` rather than by leaving
+# the `run` daemon in the background: a daemon that dies takes its diagnosis with
+# it (the container is gone by the time the scenario fails), and its progress is
+# invisible from here. Each pass advances the oracle to the current regtest tip,
+# then retries the mint. The gate is real — the deposit's block must be
+# maturation-confirmations deep AND have aged challenge-aging inside the oracle,
+# the latter in wall-clock seconds — so this loop legitimately takes minutes.
 pir_log="$LOGS/pegin-request.log"
+upd_log="$LOGS/update-oracle.log"
 for attempt in $(seq 30); do
+  bn update-oracle --to "$(btc getblockcount)" 2>&1 | tee "$upd_log" >/dev/null || true
   if bn pegin-request "$DEPOSIT_TX" 2>&1 | tee "$pir_log" >/dev/null; then
     break
   fi
-  grep -q "Key not in trie" "$pir_log" ||
+  # The two shapes the gate takes: the block is not in the confirmed MPF at all
+  # ("Key not in trie"), or the proof builder names it outright. Anything else is
+  # a real failure and must not be retried for ten minutes.
+  grep -qE "Key not in trie|BlockNotConfirmedByOracle" "$pir_log" ||
     die "pegin-request failed for a reason other than the maturation gate — see $pir_log"
   log "  deposit not yet in the oracle's confirmed root (attempt $attempt); mining + waiting"
   btc_mine 1
   sleep 20
 done
-grep -q "Key not in trie" "$pir_log" &&
+grep -qE "Key not in trie|BlockNotConfirmedByOracle" "$pir_log" &&
   die "the deposit never entered the oracle's confirmed root — see $pir_log and the bitfrost logs"
 log "  PegInRequest minted"
 

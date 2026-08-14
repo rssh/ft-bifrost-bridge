@@ -2,14 +2,15 @@ use aiken/builtin
 use bifrost/types/general.{AuthorizationMethod, CardanoSignature}
 use bifrost/utils.{safe_list_at}
 use cardano/assets.{PolicyId}
+use cardano/transaction.{OutputReference}
 
 pub type ConfigSpendRedeemer {
   Update
   Retire
 }
 
-//The rev-5.5 twelve-field Config datum (spec §Config datum). update_auth comes
-//first, because it is the field that governs every other one.
+//The rev-5.5 thirteen-field Config datum (spec §Config datum). update_auth
+//comes first, because it is the field that governs every other one.
 //
 //Two rules decide where a field goes.
 //
@@ -75,6 +76,24 @@ pub type ConfigDatum {
   //ordinary Config Update rotates it, which is the federation-key rotation the
   //field-permission matrix always promised. spec [UY-5] reads it on-chain.
   y_federation: ByteArray,
+  //The one-shot outpoint every federation script is compile-parameterized by:
+  //spos_registry, spo_bans and the three DKG fault verifiers all take it, so
+  //the three policy ids above are FUNCTIONS of this value.
+  //
+  //It finishes the argument the federation block above makes. Those fields
+  //publish the policy ids so no node hand-copies the INPUTS that produce them —
+  //but rebuilding a script still needs those inputs, and a hash cannot be
+  //inverted back to them. An operator who only READS the bridge is served by the
+  //ids; anyone who must PRODUCE script bytes — deploying a reference script, or
+  //spending treasury_info, which is embedded rather than referenced — was still
+  //copying this outpoint out of the deployer's terminal. Published here that
+  //copy disappears, and a node either derives bytes matching the ids above or
+  //fails loudly against them.
+  //
+  //NO on-chain reader; off-chain build input, published for the same reason
+  //tm_script_hash is. The UTxO itself was consumed at genesis and is long gone —
+  //only its identity matters, and only as a compile parameter.
+  federation_one_shot: OutputReference,
 }
 
 //Every value with no on-chain reader (spec [CFG-6]). Governance replaces the
@@ -216,6 +235,14 @@ pub fn get_y_federation(config_fields: List<Data>) -> ByteArray {
   builtin.un_b_data(safe_list_at(config_fields, 11))
 }
 
+//The federation one-shot outpoint. NO on-chain reader; it exists so an
+//off-chain consumer reads the index from here rather than hard-coding 12, and
+//so config_getters_match_datum_fields pins it.
+pub fn get_federation_one_shot(config_fields: List<Data>) -> OutputReference {
+  expect one_shot: OutputReference = safe_list_at(config_fields, 12)
+  one_shot
+}
+
 //Off-chain/test use only. Unlike the other getters this is a FULL cast of
 //the nested record, so any on-chain reader adopting it would freeze
 //ScheduleParams' inner shape (defeating the point of nesting it). No Aiken
@@ -304,6 +331,7 @@ test config_getters_match_datum_fields() {
       spos_registry_policy_id: #"aa09",
       treasury_info_policy_id: #"aa10",
       y_federation: #"aa11",
+      federation_one_shot: OutputReference(#"aa12", 12),
     }
   let datum_data: Data = datum
   let fields = builtin.unconstr_fields(datum_data)
@@ -330,6 +358,8 @@ test config_getters_match_datum_fields() {
     get_treasury_info_policy_id(fields) == datum.treasury_info_policy_id,
     //index 11, spec [UY-5]
     get_y_federation(fields) == datum.y_federation,
+    //index 12
+    get_federation_one_shot(fields) == datum.federation_one_shot,
     //index 1, the nested params record
     get_schedule(fields) == params.schedule,
     get_fee_rate_sat_per_vb(fields) == params.fee_rate_sat_per_vb,

@@ -364,6 +364,7 @@ fn t_config_datum() -> config_types.ConfigDatum {
     spos_registry_policy_id: t_registry_policy,
     treasury_info_policy_id: t_own_hash,
     y_federation: t_yfed,
+    federation_one_shot: OutputReference(#"aa12", 12),
   }
 }
 

@@ -190,6 +190,7 @@ const t_own_ref: OutputReference =
 //shape evolution.
 fn t_datum_data(update_auth: Option<AuthorizationMethod>) -> Data {
   let update_auth_data: Data = update_auth
+  let one_shot_data: Data = OutputReference(t_tx0, t_index0)
   let schedule_data: Data =
     ScheduleParams {
       dkg_r1_deadline: 3600,
@@ -231,12 +232,15 @@ fn t_datum_data(update_auth: Option<AuthorizationMethod>) -> Data {
       builtin.b_data(#"aa888888888888888888888888888888888888888888888888888888"),
       builtin.b_data(#"aa666666666666666666666666666666666666666666666666666666"),
       builtin.b_data(#"aa777777777777777777777777777777777777777777777777777777"),
-      //Federation identity, indexes 8-11 (spec §Config datum).
+      //Federation identity, indexes 8-12 (spec §Config datum).
       builtin.b_data(#"aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
       builtin.b_data(#"aacccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
       builtin.b_data(#"aadddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
       //y_federation, spec [UY-5]: read on-chain by treasury.ak
       builtin.b_data(#"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
+      //federation_one_shot, appended per [CFG-5]. The genesis mint FULL-CASTS
+      //this datum, so it must be a real OutputReference and not a placeholder.
+      one_shot_data,
     ],
   )
 }

@@ -4373,6 +4373,40 @@ Each SPO $P_i$ performs the following initialization steps:
 
 Ordinary non-participation does not create a new DKG attempt. All honest parties stay in the same `(epoch, threshold, attempt)` namespace and deterministically shrink the qualified subset as the Round 1 and Round 2 deadlines expire. The `attempt` field is therefore reserved for exceptional full reruns after direct cryptographic faults or epoch-level resets; in the normal protocol flow it remains `0`.
 
+> **OPEN QUESTION (raised 2026-08-16, from implementation).** This rule is implementable for
+> Round 1. For Round 2 it is *mechanically* implementable too, but doing so appears to weaken the
+> threshold, and the document should say which way it resolves.
+>
+> **Round 1 — shrink in place, as written.** A participant's published Round 1 payload is its
+> commitment $\vec{C}_i$ and its proof of knowledge, and neither depends on how many participants
+> there are: the commitment is over the $t$ polynomial coefficients, and $t$ is fixed for the
+> epoch. So the survivors can run key generation over exactly the set that published by the
+> deadline, using the payloads already published, with no rerun and with `attempt` unchanged.
+> Nothing has been shared yet, so nobody outside that set holds anything.
+>
+> **Round 2 — the mechanics work, the security argument does not.** Shares are polynomial
+> evaluations, so re-deriving them over a smaller set yields *the same* values for everyone still
+> in it; the payloads already published stay valid and no republication is needed. But a member
+> that published a valid Round 1, *received* everyone's Round 2 shares, and only then went silent
+> has by that point assembled a valid share $\sum_{i \in Q} f_i(j)$ of the very key the survivors
+> finalize — because dropping it in place leaves the polynomial unchanged. The roster then names
+> $|Q|$ shareholders while $|Q| + |L_1 \setminus Q|$ parties actually hold usable shares, so a
+> $t$-of-roster guarantee can be met by a coalition that includes a party the roster excluded. A
+> rerun does not have this property: the new polynomial makes every share from the abandoned
+> attempt worthless.
+>
+> The choice is therefore: (a) narrow the rule to Round 1 — absence before the Round 1 deadline
+> shrinks the subset in place at `attempt = 0`, absence after it is an exceptional rerun that
+> increments `attempt`; or (b) keep the rule for both rounds and state why the extra shareholder
+> is acceptable.
+>
+> **Whichever way it resolves, it must be stated**, because a divergence here is silent and total:
+> a DKG numbered `attempt = 0` on one node and `attempt = 1` on another runs in two namespaces
+> that cannot see each other's payloads, so neither node observes anything from the other and
+> neither reports an error. It also splits the fault namespace, since `namespace_hash` includes
+> `attempt` — evidence gathered under a locally-chosen attempt number is not addressable by a peer
+> that numbered differently.
+
 #### 6. Round 1: Commitments and Proofs of Knowledge
 
 Each SPO $P_i$ performs the following steps per FROST specification [2]:
@@ -5153,7 +5187,7 @@ Failures are handled deterministically so that all honest SPOs converge on the s
 **Deterministic subset selection**:
 - For DKG, the eligible set comes from `registration_list \ active_ban_list` at the relevant roster snapshot time.
 - For TM signing, the eligible set comes from the current on-chain roster minus any active ban entries.
-- In every attempt, the provisional subset is the set of SPOs that published valid Round 1 payloads before the common deadline, and the final qualified subset is the subset of those participants that also published valid Round 2 payloads.
+- In every attempt, the provisional subset is the set of SPOs that published valid Round 1 payloads before the common deadline, and the final qualified subset is the subset of those participants that also published valid Round 2 payloads. **Whether the Round 2 narrowing may happen in place is an open question** — doing so leaves a member that went silent after receiving its shares holding a usable share of the finalized key. See the note under *Round 0: Initialization*.
 - For a fixed DKG `(epoch, threshold-mode)`, the threshold `t` is constant across attempts.
 - If the final qualified subset does not meet the active threshold, the current DKG/signing mode fails immediately when the bounded phase deadlines close, and the next lower mode starts immediately if available.
 

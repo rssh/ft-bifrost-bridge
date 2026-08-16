@@ -2544,7 +2544,7 @@ flowchart LR
 | **Outputs** | `[0]` the **new treasury output** — the treasury's self-payment to the address derived from the current TreasuryDatum key at the batch snapshot slot (after Update-Y this is the new roster's address: the handoff); `[1..m]` one payment output per PegOut, ordered lexicographically by raw `scriptPubKey` bytes, each paying `btc_destination_scriptPubKey` with `amount` minus that peg-out's datum-pinned fee (see *Amounts and fees*); `[m+1]` the **BTMR1 root commitment** — a single `OP_RETURN` output committing the swept-peg-ins and completed-peg-outs MPF roots that hold after this TM (see §Bridge state singleton and *Confirm TM tx*). No per-peg-out marker outputs exist — the roots are committed once, for the whole batch |
 | **Witness** | FROST aggregated Schnorr signature(s) per the chosen variant |
 | **Validity** | CSV timelock enforced on inputs only in the federation variant |
-| **Size (est.)** | **Hard-capped at ~15 KB raw bytes** — the signed TM is carried in the Cardano Post-TM datum, which must fit the 16 KB Cardano tx limit. Per-variant max batch: ~100 peg-ins + ~100 peg-outs (51% key-path, ~107 B/input); ~57+57 (federation — script-path + CSV on every input, ~213 B/input). Beyond these, SPOs split across multiple TMs (see the ~15 KB cap above). |
+| **Size (est.)** | *(Revised, rev 5.6)* Per peg-in **input**: 107 B in the 51% key path (41 non-witness + 66 B witness: item count 1 + signature 65), 214 B in the federation path (41 + 173 B witness: item count 1 + signature 65 + revealed leaf ≈41 + control block 66, the deposit tree having two leaves; the treasury's own input is 182 B, its tree having one). Per peg-out **output**: 43 B (value 8 + length 1 + a scriptPubKey of at most 34 B). Fixed structure: 242 B key-path, 317 B federation (treasury input, treasury output, the 71-byte BTMR1 `OP_RETURN`, version/locktime/counts). **The binding limit is not on this transaction** — it is the Cardano `max_tx_size` protocol parameter (16 384 B today) applied to the *Post-TM* transaction that carries this one, where the raw TM is only one of the terms that grow with the batch. The capacity rule lives in *Ordering, capacity, and the split rule*; the earlier "hard cap at ~15 KB raw" and its ~100 + ~100 key-path pair are WITHDRAWN — the cap bounded the wrong quantity, and the pair overshot even that bound. |
 
 **Signing-path variants** (chosen by the signing cascade; see **Spending paths and Treasury Movement variants**)
 
@@ -2595,7 +2595,7 @@ flowchart LR
 | **Outputs** | `Unconfirmed TM tx` UTxO @ `TreasuryMovementValidator`; datum = `UnconfirmedTm { signed_btc_tx, creator, created, fulfilled_por_outpoints }` – `creator` (the poster's payment key hash) may reclaim the record's min-ADA after the GC grace period if the TM never mines; `created` (POSIX ms) starts that timer; `fulfilled_por_outpoints` is the UNVERIFIED data-availability hint (see *Request and record UTxOs*). Ordering comes from the TM chain itself, so no sequence fields |
 | **Validity interval** | finite `invalid_hereafter` REQUIRED: the mint enforces `created == validRange.to` (exact equality), so `created` is a guaranteed upper bound on the real posting time and the GC timer cannot be backdated |
 | **Required signers** | poster (fee spend) — permissionless |
-| **Size (est.)** | ~10.5–15.5 KB depending on the signing variant and batch size (datum carries the full signed BTC tx, up to ~15 KB). The **16 KB Cardano tx limit is the binding constraint**, and it drives the per-variant max batch sizes listed under *Treasury Movement (Bitcoin)* above. Fee ≈ 0.67 ADA at ~10.5 KB; ≈ 0.9 ADA near the 15 KB ceiling. |
+| **Size (est.)** | *(Revised, rev 5.6)* **`max_tx_size` applied to this transaction is the binding constraint on batch sizing for the whole protocol** — a host protocol parameter read from the chain, 16 384 B today, never a hardcoded constant (see *Ordering, capacity, and the split rule*). **Three** of this transaction's terms grow with the batch, not one. (a) `signed_btc_tx` — the raw TM, but as Plutus `bounded_bytes`, which the ledger encodes in 64-byte chunks: it occupies `raw + 2·⌈raw/64⌉ + 2` bytes, ≈ **3.2 % more** than its raw size. (b) `fulfilled_por_outpoints` — one 36-byte outpoint **per fulfilled peg-out**, ≈ **38 B each** encoded, a per-peg-out Cardano cost comparable to the 43-byte Bitcoin output itself. (c) Everything that does not scale with the batch: mint redeemer and exec units, collateral, change, script-data hash, the poster's vkey witness, and the `TreasuryMovementValidator` script — which rides **inline in the witness set unless it is deployed as a reference script**, so deploying it is the single largest batch-capacity gain available (≈1–3 KB, worth roughly ten peg-in/peg-out pairs). Fee ≈ 0.67 ADA at ~10.5 KB; ≈ 0.9 ADA near the ceiling. |
 
 **Checks enforced on-chain** (the `TreasuryMovementValidator` mint branch)
 
@@ -3670,15 +3670,70 @@ Note `C_1 = epoch_start − stability_window + tm_batch_interval` reaches back i
 epoch: the first batch naturally includes the prior epoch's unswept leftovers — rollover needs no
 special case.
 
-**Ordering, capacity, and the split rule.** Within a batch, items are ordered FIFO by the total
-order `(creation slot, creating txid, output index)`. The batch takes the first at most
-`max_pegins_per_tm` peg-ins and `max_pegouts_per_tm` peg-outs (derived from the ~15 KB raw-TM
-ceiling: ≈100 + 100 in the 51% key-path variant, ≈57 + 57 in the federation variant). Overflow
-**peg-ins** wait for the next batch, and so do overflow **peg-outs** — a peg-out is payable by
-whichever TM includes it, so missing a batch costs only latency. What eventually stops a peg-out
-being fulfilled is not overflow but the **fulfillment freshness filter** above: once
-`created + peg_out_cancel_timeout_ms − now` falls below the margin, no further TM may pay it and
-its only path is *Cancel PegOut request*.
+**Ordering, capacity, and the split rule.** *(Revised, rev 5.6. The two per-class counts
+`max_pegins_per_tm` and `max_pegouts_per_tm` are WITHDRAWN, and with them the ≈100 + 100 /
+≈57 + 57 pairs.)* Within a batch, items are ordered FIFO by the total order
+`(creation slot, creating txid, output index)`.
+
+Capacity is **one byte budget on the assembled Post-TM transaction**, not two independent
+per-class counts. Two independent counts cannot express a capacity limit: each can be satisfied
+while their sum exceeds it, and nothing in such a rule ever looks at the assembly. The withdrawn
+key-path pair was exactly that failure — at this document's own per-item weights, 100 peg-ins +
+100 peg-outs is 15 242 raw bytes, above the ~15 KB raw ceiling the pair was said to be derived
+from. (The largest symmetric key-path pair under that ceiling is 98 + 98 = 14 942 B; the
+federation pair 57 + 57 = 14 966 B was derived correctly. The raw-TM ceiling was itself the wrong
+quantity to bound — see *Post-TM tx*.)
+
+A byte budget is as deterministic as a count — every SPO computes the same size from the same
+published weights — and strictly better, because the two classes have different weights: a peg-in
+costs ≈2.5× a peg-out, so any fixed pair of counts either wastes capacity or exceeds it depending
+on the mix.
+
+```
+raw_v(P, Q)   = base_v + w_in_v · P + 43 · Q          the Bitcoin TM, in raw bytes
+chunked(n)    = n + 2·⌈n/64⌉ + 2                      Plutus bounded_bytes encoding of it
+post_tm(P, Q) = E + chunked(raw_v(P, Q)) + 38 · Q     the Cardano transaction that carries it
+```
+
+| Term | 51% key path | Federation CSV path |
+|---|---|---|
+| `w_in_v` — per peg-in, Bitcoin input | 107 | 214 |
+| per peg-out, Bitcoin output | 43 | 43 |
+| per peg-out, Post-TM `fulfilled_por_outpoints` entry | 38 | 38 |
+| `base_v` — fixed TM structure (counts < 253) | 242 | 317 |
+| `E` — Post-TM terms that do not scale with the batch | implementation-measured; see *Post-TM tx* | |
+
+* An SPO MUST fill the batch in FIFO order subject to `post_tm(P, Q) ≤ max_tx_size`, taking
+  **peg-outs first and then peg-ins**, and MUST NOT sign a movement whose assembled Post-TM
+  exceeds `max_tx_size`.
+* **Peg-outs are filled first because they expire.** A peg-out that keeps missing batches
+  eventually falls out of the fulfillment freshness filter and its only remaining path is *Cancel
+  PegOut request*; a peg-in rolls over indefinitely and pays only latency. Both classes do roll
+  over — a peg-out is payable by whichever TM includes it, so missing one batch is not fatal to it
+  either — but only one of them has a deadline, and the fill order is what respects it.
+* `max_tx_size` is a **host Cardano protocol parameter**, not a constant of this protocol and not
+  operator configuration. An implementation MUST read it from the chain and MUST NOT hardcode
+  16 384: Conway governance can change it, and a bridge carrying a baked-in value would either
+  refuse batches it could have carried or sign ones it cannot post.
+* It MUST be read **as of the Cardano epoch containing `B_i`** — not "whatever the node last saw",
+  and not a `latest`-style read that can straddle an epoch boundary. Protocol-parameter changes
+  take effect only at epoch boundaries, so the epoch's value is a chain fact every SPO derives
+  identically, whereas two SPOs reading "latest" either side of a boundary get two budgets and
+  therefore two different frozen batches. Batch membership must be a function of the batch (as the
+  stability cutoff already is), and this parameter is part of it. Divergence here does not produce
+  a bad signature — it produces **no** signature, because the FROST binding factors commit to the
+  signing package and the SPOs would be signing different packages.
+* An implementation MUST obtain `E` by measuring an assembled Post-TM on the target network and
+  SHOULD hold a margin below the budget. `E` is the one term this document cannot fix: it depends
+  on whether the `TreasuryMovementValidator` script rides inline or as a reference script, and it
+  MUST be re-measured when that deployment changes.
+* Overflow of either class waits for the next batch. An SPO MUST NOT split one frozen batch across
+  several simultaneous Treasury Movements — the TM chain admits one in-flight movement at a time.
+
+> **Scale.** With the two batch-scaling Post-TM terms included, a symmetric key-path batch is
+> ≈75 + 75 at `E` = 1.5 KB, and ≈65 + 65 if the validator script rides inline instead of as a
+> reference script — not the ≈100 + 100 this section used to state. The numbers are illustrative;
+> the budget is normative.
 
 **Wallet guidance (peg-out creation).** Before locking, request-building software SHOULD set
 `created` to the current time rather than backdating it — `created` is requester-set and nothing

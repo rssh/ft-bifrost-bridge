@@ -4373,6 +4373,34 @@ Each SPO $P_i$ performs the following initialization steps:
 
 Ordinary non-participation does not create a new DKG attempt. All honest parties stay in the same `(epoch, threshold, attempt)` namespace and deterministically shrink the qualified subset as the Round 1 and Round 2 deadlines expire. The `attempt` field is therefore reserved for exceptional full reruns after direct cryptographic faults or epoch-level resets; in the normal protocol flow it remains `0`.
 
+> **OPEN QUESTION (raised 2026-08-16, from implementation).** The Round 2 half of this rule
+> appears not to be implementable over a standard FROST library, and the text should say which
+> way it resolves.
+>
+> Round 1 fixes both the participant set and the polynomial degree $t-1$, and the finalization
+> step (`part3` in the reference implementations) requires a Round 2 package from **every**
+> participant that was in Round 1. A member that publishes a valid Round 1 and then goes silent
+> therefore cannot be dropped *in place*: there is no share to substitute for the missing one, and
+> no way to re-derive the group key over the smaller set without re-running Round 1. So *"the
+> final qualified subset is the subset of those participants that also published valid Round 2
+> payloads"* (§Failure handling, *Deterministic subset selection*) has no implementation short of
+> a rerun — which is precisely what `attempt` is said here to be reserved for.
+>
+> **Round 1 absence is not affected.** Closing the candidate set at the Round 1 deadline and
+> running key generation among whoever published is implementable exactly as written, and keeps
+> `attempt = 0`. That is the common case, and it is the half this document's rule can keep.
+>
+> The choice is therefore between (a) narrowing the rule to Round 1 — absence before the Round 1
+> deadline shrinks the subset in place at `attempt = 0`, absence after it is an exceptional rerun
+> that increments `attempt` — and (b) a finalization not built on the FROST `part3` contract.
+>
+> **Whichever way it resolves, it must be stated**, because a divergence here is silent and total:
+> a DKG numbered `attempt = 0` on one node and `attempt = 1` on another runs in two namespaces
+> that cannot see each other's payloads, so neither node observes anything from the other and
+> neither reports an error. It also splits the fault namespace, since `namespace_hash` includes
+> `attempt` — evidence gathered under a locally-chosen attempt number is not addressable by a peer
+> that numbered differently.
+
 #### 6. Round 1: Commitments and Proofs of Knowledge
 
 Each SPO $P_i$ performs the following steps per FROST specification [2]:
@@ -5153,7 +5181,7 @@ Failures are handled deterministically so that all honest SPOs converge on the s
 **Deterministic subset selection**:
 - For DKG, the eligible set comes from `registration_list \ active_ban_list` at the relevant roster snapshot time.
 - For TM signing, the eligible set comes from the current on-chain roster minus any active ban entries.
-- In every attempt, the provisional subset is the set of SPOs that published valid Round 1 payloads before the common deadline, and the final qualified subset is the subset of those participants that also published valid Round 2 payloads.
+- In every attempt, the provisional subset is the set of SPOs that published valid Round 1 payloads before the common deadline, and the final qualified subset is the subset of those participants that also published valid Round 2 payloads. **The Round 2 half of this is an open question** — it has no implementation over the standard FROST finalization contract, which needs a Round 2 package from every Round 1 participant. See the note under *Round 0: Initialization*.
 - For a fixed DKG `(epoch, threshold-mode)`, the threshold `t` is constant across attempts.
 - If the final qualified subset does not meet the active threshold, the current DKG/signing mode fails immediately when the bounded phase deadlines close, and the next lower mode starts immediately if available.
 

@@ -3685,9 +3685,16 @@ federation pair 57 + 57 = 14 966 B was derived correctly. The raw-TM ceiling was
 quantity to bound — see *Post-TM tx*.)
 
 A byte budget is as deterministic as a count — every SPO computes the same size from the same
-published weights — and strictly better, because the two classes have different weights: a peg-in
-costs ≈2.5× a peg-out, so any fixed pair of counts either wastes capacity or exceeds it depending
-on the mix.
+published weights — and strictly better, because the two classes have different weights, so any
+fixed pair of counts either wastes capacity or exceeds it depending on the mix.
+
+Note *where* those weights are compared, because the two answers differ and only one of them is
+the budget's. On the raw Bitcoin transaction a peg-in costs ≈2.5× a peg-out (107 B against 43 B).
+On the **Post-TM**, which is what the budget bounds, the peg-out additionally carries its 38-byte
+`fulfilled_por_outpoints` entry while the peg-in only picks up chunking — ≈111 B against ≈83 B,
+a ratio nearer 4:3. Sizing a batch from the Bitcoin-side ratio therefore overstates how many
+peg-outs a movement can absorb, which is the same mistake in a smaller form as bounding the raw
+transaction instead of the Post-TM.
 
 ```
 raw_v(P, Q)   = base_v + w_in_v · P + 43 · Q          the Bitcoin TM, in raw bytes

@@ -3758,9 +3758,10 @@ examples for a mainnet-parameter instance:
 | `stability_window` | **derived** | `= 3k/f` of the host Cardano network (see *Cardano stability window*); the governing authority MUST reject smaller values — it is fund-safety-critical, tunable only upward | 129 600 slots (36 h) |
 | `dkg_r1_deadline`, `dkg_r2_deadline` | free | E-relative; `0 < r1 < r2 < update_y_deadline` | E + 1 h / E + 2 h |
 | `update_y_deadline` | constrained | `> dkg_r2_deadline`; early enough that depositors get the new key before meaningful deposit traffic | E + 3 h |
-| `tm_batch_interval` | free | `> sign_r1_window + sign_r2_window +` posting margin | 6 h |
-| `sign_r1_window`, `sign_r2_window` | free | per-TM FROST round deadlines, measured from `B_i` | 30 min each |
-| `leader_slot_T` | free | cascade hop for posting/submission conventions | 60 slots |
+| `tm_batch_interval` | free | `> max_sign_attempts × (sign_r1_window + sign_r2_window) + roster_size × leader_slot_T`; SHOULD be wide enough for `max_sign_attempts ≥ 2` (see *Round-2 shortfall opens a new attempt*) | 6 h |
+| `sign_r1_window`, `sign_r2_window` | free | per-TM FROST round deadlines, **per attempt**, measured from `B_i` | 30 min each |
+| `leader_slot_T` | free | cascade hop for posting/submission conventions; also sets the posting margin `roster_size × leader_slot_T` reserved out of `tm_batch_interval` | 60 slots |
+| `max_sign_attempts` | **derived** | `= max(1, ⌊(tm_batch_interval − roster_size × leader_slot_T) / (sign_r1_window + sign_r2_window)⌋)`; not a stored field — every SPO computes it from the row above and the on-chain roster | 5 |
 | `tm_recovery_window` | **constrained** | **must exceed the normal Binocular confirmation latency** (~100 BTC blocks + challenge ≈ 17–20 h), or healthy TMs are spuriously "recovered"; recommended ≥ 2× expected latency | 36 h |
 | `final_tm_cutoff` | constrained | `≤ epoch_length − (sign windows + posting + tm_recovery_window + handoff margin)` | E + 4 d |
 
@@ -4371,7 +4372,7 @@ Each SPO $P_i$ performs the following initialization steps:
 6. Order candidates lexicographically by `bifrost_id_pk` and assign indices.
 7. Verify own participation (own `pool_id` is in the candidate set).
 
-Ordinary non-participation does not create a new DKG attempt. All honest parties stay in the same `(epoch, threshold, attempt)` namespace and deterministically shrink the qualified subset as the Round 1 and Round 2 deadlines expire. The `attempt` field is therefore reserved for exceptional full reruns after direct cryptographic faults or epoch-level resets; in the normal protocol flow it remains `0`.
+Ordinary non-participation does not create a new DKG attempt. All honest parties stay in the same `(epoch, threshold, attempt)` namespace and deterministically shrink the qualified subset as the Round 1 and Round 2 deadlines expire. The `attempt` field is therefore reserved for exceptional full reruns after direct cryptographic faults or epoch-level resets; in the normal protocol flow it remains `0`. **This is the DKG rule only.** The signing namespace's `attempt` field behaves differently — it advances on an ordinary Round-2 shortfall — because a signing round, unlike a DKG round, cannot shrink after Round 1 without reusing nonces (see *Round-2 shortfall opens a new attempt*).
 
 #### 6. Round 1: Commitments and Proofs of Knowledge
 
@@ -4865,7 +4866,7 @@ The roster may process **multiple TM transactions** within an epoch, each cyclin
 
 The signing namespace is identified by the tuple `(epoch, txid, mode, attempt)` where:
 - `mode ∈ {51}` selects the active SPO threshold path — a single value today; the field is kept in the namespace and the canonical layouts so that adding a future threshold mode does not change any byte layout. The **federation mode has no signing namespace at all**: it uses no SPO endpoints and no FROST rounds;
-- `attempt` is reserved for exceptional reruns of the same mode for the same TM; in the normal protocol flow it remains `0`; and
+- `attempt` counts the signing runs of that mode for that TM. Unlike the DKG's `attempt` field — which is reserved for exceptional full reruns — the signing `attempt` advances in the **normal** protocol flow, because a threshold signing round cannot shrink after Round 1 the way a DKG round can (see *Round-2 shortfall opens a new attempt*). It starts at `0` and is a function of the slot; and
 - every namespace requires **fresh nonce commitments**. A signer must never reuse FROST nonces across different `(epoch, txid, mode, attempt)` tuples, even if the unsigned Bitcoin transaction is unchanged.
 
 Each SPO publishes its constructed TM at:
@@ -4957,10 +4958,97 @@ Each SPO $P_i$ in the subset participating in signing performs these steps **for
 After computing all $z_{i,j}$:
 5. Each $P_i$ publishes their partial signatures at `<bifrost_url>/sign/<epoch>/<txid>/<mode>/<attempt>/round2/<pool_id>.json`.
 6. Each $P_i$ fetches partial signatures from peers and classifies liveness:
-   - missing Round 2 payload from a member of the provisional subset -> exclude that signer from the final signing subset;
+   - a member of the provisional subset $S_1$ that published no valid Round 2 payload before the deadline is a **Round-2 shortfall**. The attempt cannot be aggregated at all — not even over the survivors — and the mode continues at `attempt + 1` without that member (see *Round-2 shortfall opens a new attempt*);
    - signing-round equivocation and invalid partial-signature proofs are deferred from the DKG fault verifier set.
-7. If the remaining valid partial signatures still satisfy the active threshold, continue.
-8. Each $P_i$ can compute the group's response for each input (the sum of $z_{i,j}$'s), arriving to the same per-input signature $σ_j = (R_j, z_j)$, completing the fully signed transaction.
+7. If every member of $S_1$ published a valid Round 2 payload, continue to step 8. Otherwise this attempt is abandoned.
+8. Each $P_i$ can compute the group's response for each input (the sum over **all of $S_1$** of the $z_{i,j}$'s), arriving to the same per-input signature $σ_j = (R_j, z_j)$, completing the fully signed transaction.
+
+**Round-2 shortfall opens a new attempt.**
+
+Aggregation is over **exactly $S_1$**, never a subset of it. The signing package is $S_1$'s list of
+Round-1 commitments; the binding values, the group commitment $R_j$ and the challenge are all
+hashes over that list, and every $z_{i,j}$ is computed against it. Dropping a member of $S_1$ from
+the sum leaves a value that does not verify against $R_j$ — a "partial $S_1$" aggregate is not a
+weaker signature, it is not a signature.
+
+> **MUST NOT.** An implementation MUST NOT answer a Round-2 shortfall by re-deriving the signing
+> package over the survivors and having them recompute $z_{i,j}$. That is a second challenge
+> against the same nonce pair $(d_i, e_i)$, and two responses on one nonce reveal $s_i$ — it would
+> trade a stalled movement for the treasury key. Once a signer has published Round 1 in a
+> namespace, its nonces for that namespace are spent whatever happens next.
+
+A Round-2 shortfall therefore does not shrink the subset; it ends the attempt. Every honest SPO
+then opens `attempt + 1` for the same `(epoch, txid, mode)` with **fresh Round 1 commitments**:
+
+* **(a) Who is in the next attempt.** Attempt $a+1$'s eligible set is attempt $a$'s eligible set
+  minus every member of $S_1(a)$ that did not publish a valid Round 2 payload before attempt $a$'s
+  Round-2 deadline. Every SPO derives that exclusion from the same published payloads. It is
+  **monotone** — a member excluded at attempt $a$ stays excluded for every later attempt of this
+  `(epoch, txid, mode)`, so the eligible set strictly shrinks and the cascade terminates — and it
+  **expires with the TM**: it is not a ban, it mints no `FaultProof`, and it has no effect on the
+  next movement.
+
+  An SPO that published no Round 1 in attempt $a$ was never in $S_1(a)$ and is **not** excluded
+  from attempt $a+1$. Silence before Round 1 costs the protocol nothing (Round 1 closes on the
+  threshold, not on the roster) and is not evidence of anything. Only commit-then-withhold is.
+
+  This is what the signing namespace's `attempt` field is *for*, and it is the only lever the
+  protocol has against a member that denies every movement it joins: a Round-2 non-publisher is
+  unpunishable by design (see *Failure handling*), so a member re-admitted to every attempt could
+  stall each one in turn for ever. Monotone exclusion bounds the damage at one attempt per
+  defector. Note that this needs no malice to fire — an SPO that simply *crashes* between the two
+  deadlines does exactly the same thing, which on a large roster makes it the expected case rather
+  than the adversarial one.
+
+* **(b) Deadlines.** Attempt $a$'s round deadlines are absolute slots from the batch opportunity
+  $B_i$:
+
+  ```
+  r1_deadline(a) = B_i + (a+1) × sign_r1_window + a × sign_r2_window
+  r2_deadline(a) = B_i + (a+1) × (sign_r1_window + sign_r2_window)
+  ```
+
+  A payload published into attempt $a$'s namespace after `r1_deadline(a)` (Round 1) or
+  `r2_deadline(a)` (Round 2) is treated exactly as if never published.
+
+* **(c) How many attempts.** The cascade must leave room to post the result before the next batch
+  opportunity supersedes it, so attempt $a$ opens only if
+
+  ```
+  r2_deadline(a) + roster_size × leader_slot_T  ≤  B_(i+1)
+  ```
+
+  The second term is the leader cascade's worst case (*Cardano submission and leader reward*) and
+  is the posting margin that the `tm_batch_interval` constraint refers to. Equivalently:
+
+  ```
+  max_sign_attempts = max(1, ⌊ (tm_batch_interval − roster_size × leader_slot_T)
+                                 / (sign_r1_window + sign_r2_window) ⌋)
+  ```
+
+  Every term is published — the windows and `leader_slot_T` in Config #16 `schedule`,
+  `roster_size` in the on-chain roster — so no SPO needs local configuration to agree on the
+  bound. The `max(1, …)` floor means a schedule too tight for even one attempt still runs one:
+  the movement is then merely late, never unsafe. But a schedule admitting only one attempt
+  reproduces exactly the single-defector denial this rule exists to remove, so the governing
+  authority SHOULD size `tm_batch_interval` for `max_sign_attempts ≥ 2`. Note the term is linear
+  in `roster_size`: a large roster with a coarse `leader_slot_T` can consume the whole interval
+  before any attempt runs, which is the constraint's job to surface.
+
+  If the eligible set falls below the active threshold, or `max_sign_attempts` is exhausted, the
+  `51` mode fails and the federation mode opens immediately, as *Signing cascade* specifies.
+
+* **(d) Agreeing on the attempt number.** The attempt number is **derived, not announced**: it is
+  a function of the current slot through the deadlines in (b), exactly as the rounds themselves
+  are. An SPO joining late reads it off the slot rather than off what peers advertise, so there is
+  no agreement round to attack.
+
+  Honest SPOs can still briefly disagree on whether an attempt *succeeded* — one that failed to
+  fetch a Round-2 payload before the deadline opens attempt $a+1$ while the others aggregate
+  attempt $a$. That is a liveness wobble, not a fork. Both attempts sign the same unsigned
+  transaction, so they yield the same Bitcoin txid under different witnesses, both spend the same
+  head, and at most one TM spending a given head can ever confirm (see *The TM chain*). A node
+  that opened a superfluous attempt sees the posted TM and stops.
 
 **Round 2 payload structure**:
 
@@ -5002,15 +5090,15 @@ For a given TM in the `51` mode, all honest SPOs derive the same signing state:
 5. If the delegated stake of `S1` is below the active mode threshold, the mode fails immediately when Round 1 closes.
 6. Otherwise continue with exactly `S1` into Round 2.
 7. Wait until the Round 2 deadline and collect every valid Round 2 payload published by members of `S1`.
-8. Define the final signing subset `S2` as the members of `S1` that published valid Round 2 payloads before the deadline.
-9. Invalid or equivocating Round 2 payloads may be proven at the appropriate authorized fault verifier policy and are excluded from aggregation.
-10. If `S2` provides enough valid partial signatures to satisfy the active threshold, the mode succeeds.
-11. Otherwise the mode fails immediately when Round 2 closes.
+8. If **every** member of `S1` published a valid Round 2 payload, aggregate over `S1` and the attempt succeeds. There is no smaller final subset: aggregation is over exactly the set whose Round-1 commitments formed the signing package (see *Round-2 shortfall opens a new attempt*).
+9. Invalid or equivocating Round 2 payloads may be proven at the appropriate authorized fault verifier policy. A member whose Round 2 payload is invalid counts as a Round-2 shortfall for the purposes of step 10 — it cannot be dropped from the aggregation any more than a missing one can.
+10. Otherwise the attempt fails when Round 2 closes, and the mode opens `attempt + 1` over the eligible set minus this attempt's Round-2 non-publishers, with fresh Round 1 commitments.
+11. The mode itself fails — handing over to the next mode in the cascade — when the eligible set falls below the active threshold, or when `max_sign_attempts` attempts have closed without a signature.
 
 **Mode transition rules:**
 - **51% mode** opens first and uses the $Y_{51}$ treasury key path if the DKG completed during setup.
 - **Federation mode** opens immediately once 51% mode has finished unsuccessfully, or immediately if the DKG did not produce a usable key during setup.
-- The overall bound for the cascade is therefore implicit: it is the sum of the bounded DKG and signing step deadlines, with no extra inter-mode timer.
+- The overall bound for the cascade is therefore implicit: it is the sum of the bounded DKG and signing step deadlines, with no extra inter-mode timer. For the `51` mode the signing term is `max_sign_attempts × (sign_r1_window + sign_r2_window)` — the attempts are inside the mode, not a further cascade level, and they are budgeted so that the last one still leaves the posting margin before `B_(i+1)`.
 
 Federation mode does not use the SPO HTTP endpoints. It is an on-chain and Bitcoin-level emergency fallback after the 51% mode has either failed or never become available.
 
@@ -5143,8 +5231,9 @@ Failures are handled deterministically so that all honest SPOs converge on the s
 - Missing Round 1 publication does **not** create a challenge and does **not** immediately create an on-chain ban.
 
 **Round 2 missing publication**:
-- If an SPO that is already in the provisional subset fails to publish a valid signed Round 2 payload before the deadline, that SPO is excluded from the final qualified subset for the current DKG/signing run.
-- Missing Round 2 publication does **not** create a challenge and does **not** immediately create an on-chain ban.
+- Missing Round 2 publication does **not** create a challenge and does **not** immediately create an on-chain ban. What it costs the non-publisher differs between the two protocols, because a DKG round can shrink after Round 1 and a threshold signing round cannot:
+  - **DKG**: the SPO is excluded from the final qualified subset for the current run. The run continues with the survivors — the missing shares are simply absent, and the remaining participants still derive a usable key.
+  - **TM signing**: the *attempt* is abandoned, because the signing package is fixed by `S1`'s Round-1 commitments and cannot be re-derived over the survivors without reusing their nonces. The mode continues at `attempt + 1` over the eligible set minus this attempt's Round-2 non-publishers, with fresh commitments (see *Round-2 shortfall opens a new attempt*). The exclusion lasts for that TM only.
 
 **Direct faults**:
 - If an SPO publishes a payload with a valid transport signature but invalid cryptographic contents, or publishes two distinct signed payloads for the same namespace, any eligible SPO may submit direct fault evidence to the appropriate authorized fault verifier policy.
@@ -5153,9 +5242,9 @@ Failures are handled deterministically so that all honest SPOs converge on the s
 **Deterministic subset selection**:
 - For DKG, the eligible set comes from `registration_list \ active_ban_list` at the relevant roster snapshot time.
 - For TM signing, the eligible set comes from the current on-chain roster minus any active ban entries.
-- In every attempt, the provisional subset is the set of SPOs that published valid Round 1 payloads before the common deadline, and the final qualified subset is the subset of those participants that also published valid Round 2 payloads.
-- For a fixed DKG `(epoch, threshold-mode)`, the threshold `t` is constant across attempts.
-- If the final qualified subset does not meet the active threshold, the current DKG/signing mode fails immediately when the bounded phase deadlines close, and the next lower mode starts immediately if available.
+- In every attempt, the provisional subset is the set of SPOs that published valid Round 1 payloads before the common deadline. For DKG the final qualified subset is the subset of those participants that also published valid Round 2 payloads; for TM signing there is no smaller final subset — the attempt either aggregates over the whole provisional subset or is abandoned for the next attempt.
+- For a fixed DKG `(epoch, threshold-mode)`, the threshold `t` is constant across attempts. It is likewise constant across TM signing attempts: excluding a Round-2 non-publisher shrinks who may participate, never what they must reach.
+- If the qualified subset does not meet the active threshold, the current DKG/signing mode fails immediately when the bounded phase deadlines close, and the next lower mode starts immediately if available. For TM signing that test is applied to the attempt's eligible set at Round 1, and again after each attempt's exclusions.
 
 ## Watchtowers
 
